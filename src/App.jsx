@@ -464,7 +464,11 @@ function App() {
                       <div className="message-sources-label">Sources</div>
                       {m.metadata.sources.map((source, i) => (
                         <div className="message-source" key={i}>
-                          {source.document}
+                          {source.url ? (
+                            <a href={source.url} target="_blank" rel="noreferrer">
+                              {source.document || source.domain || source.url}
+                            </a>
+                          ) : source.document}
                           {source.page ? ` · Page ${source.page}` : ""}
                         </div>
                       ))}

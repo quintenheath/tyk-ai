@@ -7,6 +7,7 @@
 import { generateAnswer } from "../_shared/ai-router.ts";
 import { supabaseAdmin as supabase } from "../_shared/supabase-admin.ts";
 import { hasPermission } from "../_shared/permissions.ts";
+import { researchWeb, saveWebResearch } from "../_shared/web-research.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -42,6 +43,29 @@ const SEED_CODE_SOURCES = [
     url: "https://www.ontario.ca/laws/regulation/070213",
     sourceType: "government",
   },
+];
+
+const RESEARCH_AREAS = [
+  "commercial door hardware",
+  "exit devices and panic hardware",
+  "door closers",
+  "locks and leversets",
+  "mortise locks",
+  "rim and mortise exit devices",
+  "electric strikes and electric locks",
+  "hinges and continuous hinges",
+  "thresholds weatherstripping and door sweeps",
+  "automatic operators and access control",
+  "door frames steel doors and hollow metal",
+  "aluminum doors storefront and glazing",
+  "hardware schedules and door schedules",
+  "shop drawings and installation procedures",
+  "manufacturer installation manuals",
+  "manufacturer catalogs and technical bulletins",
+  "product compatibility and part number cross references",
+  "Ontario building and fire requirements",
+  "commercial door hardware suppliers and distributors",
+  "Tykel terminology and lessons learned",
 ];
 
 function json(body, status = 200) {
@@ -109,6 +133,23 @@ async function ensureCodeTasks() {
       reason: "Core Ontario code/requirement coverage TYK must maintain.",
       priority: 8,
       source_type: source.sourceType,
+      status: "queued",
+    }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
+  }
+}
+
+async function ensureResearchAreaTasks() {
+  for (const area of RESEARCH_AREAS) {
+    const title = `Research ${area}`;
+    await supabase.from("research_queue").upsert({
+      topic: area,
+      title,
+      description: `Find authoritative, reusable evidence about ${area}; prefer official, standards, manufacturer, and authorized technical sources.`,
+      type: "RESEARCH",
+      reason: `Systematic coverage of the ${area} research domain.`,
+      priority: /fire|exit|compatibility|installation/i.test(area) ? 7 : 4,
+      source_type: "web_search",
+      search_queries: [area, `${area} official documentation`, `${area} manufacturer technical information`],
       status: "queued",
     }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
   }
@@ -393,6 +434,37 @@ async function researchEntitySource(task, budget) {
   };
 }
 
+async function researchWebTask(task, budget) {
+  if (budget.aiCalls >= MAX_AI_CALLS_PER_RUN) {
+    return { result: "Deferred - research AI budget exhausted for this run.", deferred: true };
+  }
+
+  budget.aiCalls++;
+  const research = await researchWeb(task.topic, {
+    searchQueries: Array.isArray(task.search_queries) && task.search_queries.length
+      ? task.search_queries
+      : undefined,
+  });
+  if (!research) {
+    return { result: null, failures: "No grounded web evidence was returned." };
+  }
+
+  await saveWebResearch(research);
+  return {
+    result: `Found ${research.sources.length} grounded source(s) for ${task.topic}.`,
+    documentsFound: research.sources.length,
+    knowledgeCreated: research.facts?.length || 0,
+    discoveredKnowledge: {
+      topic: research.topic,
+      entityName: research.entityName,
+      facts: research.facts,
+      sources: research.sources.map((source) => ({ url: source.url, title: source.title })),
+    },
+    confidence: research.confidence,
+    aiUsed: true,
+  };
+}
+
 // Deterministic (zero-AI) maintenance work - the "if knowledge is already
 // complete, switch to maintenance/research tasks" fallback. Every check here
 // is a real HTTP/DB check, never a fabricated question.
@@ -456,6 +528,7 @@ async function runMaintenanceTask(task, budget) {
 
 async function runResearch() {
   await ensureCodeTasks();
+  await ensureResearchAreaTasks();
   await generateGapTasks();
 
   const { count: queuedCount } = await supabase
@@ -489,7 +562,9 @@ async function runResearch() {
     const isCodeSource = SEED_CODE_SOURCES.some((s) => s.topic === task.topic);
     let outcome;
     try {
-      outcome = task.entity_id
+      outcome = task.type === "RESEARCH"
+        ? await researchWebTask(task, budget)
+        : task.entity_id
         ? await researchEntitySource(task, budget)
         : isCodeSource
         ? await researchCodeSource(task, budget)
@@ -518,7 +593,12 @@ async function runResearch() {
       attempts,
       result: outcome.result || null,
       last_researched_at: new Date().toISOString(),
+      last_attempted_at: new Date().toISOString(),
       next_research_date: outcome.deferred ? task.next_research_date : nextDate,
+      next_attempt_at: outcome.deferred ? task.next_attempt_at : nextDate,
+      retry_count: attempts,
+      confidence: outcome.confidence || null,
+      discovered_knowledge: outcome.discoveredKnowledge || {},
       updated_at: new Date().toISOString(),
     }).eq("id", task.id);
 

@@ -169,8 +169,10 @@ function webSourceCitations(sources) {
     document: source.title,
     url: source.url,
     domain: source.domain,
-    sourceType: source.sourceType || "web_search",
+    sourceType: source.sourceType || (source.authoritative ? "authoritative_web" : "web_search"),
     confidence: source.confidence,
+    evidence: source.evidenceText,
+    authoritative: source.authoritative,
   }));
 }
 
@@ -490,6 +492,7 @@ Deno.serve(async (req) => {
               domain: savedSource.domain,
               sourceType: savedSource.source_type,
               confidence: savedSource.confidence,
+              authoritative: savedSource.authoritative,
             }],
             aiRequired: false,
             needsWebResearch: false,
@@ -527,10 +530,14 @@ Deno.serve(async (req) => {
           return new Response(
             JSON.stringify({
               success: true,
-              answer: research.answer,
+              answer: research.ambiguity
+                ? `${research.answer}\n\nEvidence note: ${research.ambiguity}`
+                : research.answer,
               sources: webSourceCitations(research.sources).map((source) => ({
                 ...source,
                 confidence: research.confidence,
+                evidence: source.evidenceText,
+                authoritative: source.authoritative,
               })),
               aiRequired: true,
               needsWebResearch: true,

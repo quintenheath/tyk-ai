@@ -20,6 +20,23 @@ function questionTerms(question) {
   )].slice(0, 8);
 }
 
+function buildSearchQueries(question) {
+  const clean = question.trim().replace(/[?!.]+$/, "");
+  const designation = clean.match(/\b(?:what is|what are|tell me about)\s+([a-z0-9-]+)\b/i)?.[1];
+  const queries = [clean];
+  if (designation && /^\d+[a-z0-9-]*$/i.test(designation)) {
+    queries.push(
+      `${designation} commercial door hardware`,
+      `${designation} exit device`,
+      `${designation} door hardware manufacturer`,
+      `${designation} installation manual`,
+    );
+  } else {
+    queries.push(`${clean} official documentation`, `${clean} manufacturer technical information`);
+  }
+  return [...new Set(queries)].slice(0, 5);
+}
+
 function parseJsonAnswer(text) {
   const candidate = text.match(/\{[\s\S]*\}/)?.[0];
   if (!candidate) return null;
@@ -38,21 +55,28 @@ function fallbackTitle(question) {
   return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : "Web research";
 }
 
-function normalizeSources(groundingChunks) {
+function normalizeSources(groundingChunks, groundingSupports) {
   return (groundingChunks || [])
-    .map((chunk) => chunk?.web)
-    .filter((source) => source?.uri)
-    .map((source) => ({
-      url: source.uri,
-      title: source.title || source.uri,
+    .map((chunk, index) => ({ web: chunk?.web, index }))
+    .filter((chunk) => chunk.web)
+    .map(({ web, index }) => ({
+      url: web.uri,
+      title: web.title || web.uri,
       domain: (() => {
         try {
-          return new URL(source.uri).hostname.replace(/^www\./, "");
+          return new URL(web.uri).hostname.replace(/^www\./, "");
         } catch {
           return null;
         }
       })(),
+      evidenceText: (groundingSupports || [])
+        .filter((support) => support.groundingChunkIndices?.includes(index))
+        .map((support) => support.segment?.text)
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, 2000),
     }))
+    .filter((source) => source?.url)
     .filter((source, index, all) => all.findIndex((item) => item.url === source.url) === index)
     .slice(0, 8);
 }
@@ -73,32 +97,38 @@ export async function findSavedWebSource(question) {
   const terms = questionTerms(question);
   if (terms.length === 0) return null;
 
+  const candidates = new Map();
   for (const term of terms) {
     const pattern = `%${term}%`;
     const { data, error } = await supabaseAdmin
       .from("web_sources")
-      .select("id, url, title, domain, snippet, topic, entity_name, answer, confidence, source_type")
+      .select("id, url, title, domain, snippet, topic, entity_name, answer, confidence, source_type, authoritative, retrieved_at")
       .or(`topic.ilike.${pattern},title.ilike.${pattern},snippet.ilike.${pattern},answer.ilike.${pattern}`)
       .order("retrieved_at", { ascending: false })
-      .limit(3);
+      .limit(10);
     if (error) {
       console.error("Saved web-source search failed (continuing):", error);
       return null;
     }
-    if (data?.length) return data[0];
+    for (const source of data || []) {
+      const score = (candidates.get(source.id)?.score || 0) + 1 + (source.authoritative ? 0.5 : 0);
+      candidates.set(source.id, { source, score });
+    }
   }
-  return null;
+  return [...candidates.values()].sort((a, b) => b.score - a.score)[0]?.source || null;
 }
 
-export async function researchWeb(question) {
+export async function researchWeb(question, context = {}) {
   const apiKey = Deno.env.get("GEMINI_API_KEY");
   if (!apiKey) return null;
 
+  const searchQueries = context.searchQueries || buildSearchQueries(question);
   const prompt = `Research this public-web question for TYK using Google Search grounding.
 Prefer authoritative sources in this order: government, official code or standards organization, manufacturer, supplier, authorized technical source, reputable industry source, general web result.
-Do not guess or silently merge conflicting facts. Use only facts supported by the returned sources.
+Run or consider these generated search queries: ${searchQueries.join(" | ")}
+Do not guess or silently merge conflicting facts. Use only facts supported by the returned sources. If sources disagree, describe the conflict instead of picking silently.
 Return JSON only with these fields:
-{"answer":"concise answer with source-aware wording","title":"specific conversation title","topic_summary":"one or two sentence topic summary","topic":"short research topic","entity_name":"product, manufacturer, or null","confidence":"high|medium|low"}
+{"answer":"concise answer with source-aware wording","title":"specific conversation title","topic_summary":"one or two sentence topic summary","topic":"short research topic","entity_name":"product, manufacturer, or null","confidence":"high|medium|low","facts":[{"claim":"fact","value":"value","source_url":"url or null"}],"ambiguity":"none or concise ambiguity/conflict description"}
 Question: ${question}`;
 
   const response = await fetch(
@@ -128,7 +158,11 @@ Question: ${question}`;
   if (!text) return null;
 
   const parsed = parseJsonAnswer(text) || {};
-  const sources = sortSources(normalizeSources(candidate?.groundingMetadata?.groundingChunks));
+  const groundingMetadata = candidate?.groundingMetadata || {};
+  const sources = sortSources(normalizeSources(
+    groundingMetadata.groundingChunks,
+    groundingMetadata.groundingSupports,
+  ));
   if (sources.length === 0) return null;
 
   return {
@@ -138,6 +172,9 @@ Question: ${question}`;
     topic: parsed.topic || fallbackTitle(question),
     entityName: parsed.entity_name || null,
     confidence: parsed.confidence || "medium",
+    facts: Array.isArray(parsed.facts) ? parsed.facts.slice(0, 20) : [],
+    ambiguity: parsed.ambiguity || null,
+    searchQueries,
     sources,
     provider: "gemini_google_search",
     model: GEMINI_SEARCH_MODEL,
@@ -165,6 +202,10 @@ export async function saveWebResearch(research, conversationId = null) {
         domain: source.domain,
         retrieved_at: retrievedAt,
         snippet: research.answer.slice(0, 1200),
+        evidence_text: source.evidenceText || research.answer.slice(0, 2000),
+        extracted_facts: research.facts || [],
+        search_query: research.searchQueries?.join("\n") || research.topic,
+        authoritative: authoritativeRank(source.domain) >= 6,
         topic: research.topic,
         entity_id: entityId,
         entity_name: research.entityName,
@@ -177,10 +218,27 @@ export async function saveWebResearch(research, conversationId = null) {
           : "web_search",
         provider: research.provider,
         conversation_id: conversationId,
+        knowledge_state: "SOURCE_BACKED",
         updated_at: retrievedAt,
       }, { onConflict: "url,topic" });
     } catch (error) {
       console.error("Failed to save web source (ignored):", error);
+    }
+  }
+
+  if (research.ambiguity && research.sources.length >= 2) {
+    try {
+      await supabaseAdmin.from("web_source_conflicts").insert({
+        entity_name: research.entityName,
+        topic: research.topic,
+        source_a_url: research.sources[0].url,
+        source_b_url: research.sources[1].url,
+        source_a_claim: research.answer,
+        source_b_claim: research.ambiguity,
+        status: "NEEDS_REVIEW",
+      });
+    } catch (error) {
+      console.error("Failed to save web-source conflict (ignored):", error);
     }
   }
 }
