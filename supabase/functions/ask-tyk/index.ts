@@ -181,8 +181,32 @@ function webSourceCitations(sources) {
 async function saveUnansweredQuestion(question) {
   try {
     await supabaseAdmin.from("learning_entries").insert({ question });
+
+    const clean = question.trim().replace(/[?!.]+$/, "");
+    const designation = clean.match(/\b(?:what is|what are|tell me about)\s+([a-z0-9-]+)\b/i)?.[1];
+    const searchQueries = designation && /^\d+[a-z0-9-]*$/i.test(designation)
+      ? [
+        clean,
+        `${designation} commercial door hardware`,
+        `${designation} exit device`,
+        `${designation} door hardware manufacturer`,
+        `${designation} installation manual`,
+      ]
+      : [clean, `${clean} official documentation`, `${clean} manufacturer technical information`];
+
+    await supabaseAdmin.from("research_queue").upsert({
+      topic: clean,
+      title: `Research: ${clean}`,
+      description: "Find authoritative external evidence for a question TYK could not answer from its existing knowledge.",
+      type: "RESEARCH",
+      priority: 6,
+      source_type: "web_search",
+      search_queries: [...new Set(searchQueries)].slice(0, 5),
+      reason: "A user question remained unresolved after internal knowledge, document, learned-answer, and connected-source checks.",
+      status: "queued",
+    }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
   } catch (err) {
-    console.error("Failed to save unanswered question (ignored):", err);
+    console.error("Failed to save unanswered question or research task (ignored):", err);
   }
 }
 
@@ -635,7 +659,7 @@ Deno.serve(async (req) => {
 
       const fallbackAnswer = partial || (suppressLearning
         ? "I don't have enough verified information to answer that yet."
-        : "I don't have enough verified information to answer that yet. I've saved this question so TYK can continue learning.");
+        : "I couldn't find a reliable source yet. I've created a research task so TYK can investigate it further.");
 
       return new Response(
         JSON.stringify({
