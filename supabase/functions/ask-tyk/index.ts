@@ -306,6 +306,7 @@ Deno.serve(async (req) => {
       : [];
     const images = Array.isArray(body?.images) ? body.images : [];
     const history = Array.isArray(body?.history) ? body.history : [];
+    const suppressLearning = body?.suppressLearning === true;
 
     if (!question || typeof question !== "string") {
       return new Response(
@@ -375,7 +376,7 @@ Deno.serve(async (req) => {
 
     // Knowledge-first reuse: a semantically similar question we've already
     // answered and verified means zero AI calls this time too.
-    if (isPlainTextQuestion && questionEmbedding) {
+    if (isPlainTextQuestion && questionEmbedding && !suppressLearning) {
       const reusable = await findReusableAnswer(questionEmbedding);
       if (reusable) {
         markAnswerReused(reusable.id);
@@ -605,15 +606,18 @@ Deno.serve(async (req) => {
         ? buildPartialAnswer(knowledgeChunks)
         : null;
 
-      if (!partial && isPlainTextQuestion) {
+      if (!partial && isPlainTextQuestion && !suppressLearning) {
         await saveUnansweredQuestion(normalizedQuestion);
       }
+
+      const fallbackAnswer = partial || (suppressLearning
+        ? "I don't have enough verified information to answer that yet."
+        : "I don't have enough verified information to answer that yet. I've saved this question so TYK can continue learning.");
 
       return new Response(
         JSON.stringify({
           success: true,
-          answer: partial ||
-            "I don't have enough verified information to answer that yet. I've saved this question so TYK can continue learning.",
+          answer: fallbackAnswer,
           provider: "none",
           model: "none",
           sources: partial

@@ -17,9 +17,17 @@ export async function askTyk({
   images,
   history,
   conversationId,
+  suppressLearning = false,
 }) {
   const { data, error } = await supabase.functions.invoke("ask-tyk", {
-    body: { question, attachedDocumentIds, images, history, conversationId },
+    body: {
+      question,
+      attachedDocumentIds,
+      images,
+      history,
+      conversationId,
+      suppressLearning,
+    },
   });
 
   if (error) {

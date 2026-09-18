@@ -24,11 +24,15 @@ function FaceTimeOverlay({
   const conversationIdRef = useRef(conversationId);
   const messagesRef = useRef(messages);
   const recognitionRef = useRef(null);
-  const activeRef = useRef(false);
+  const recognitionConstructorRef = useRef(null);
+  const callActiveRef = useRef(false);
+  const sessionIdRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const [cameraError, setCameraError] = useState("");
   const [supported, setSupported] = useState(true);
-  const [active, setActive] = useState(false);
+  const [callActive, setCallActive] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
   const [status, setStatus] = useState("Tap the camera to start FaceTime");
   const [errorText, setErrorText] = useState("");
   const [turns, setTurns] = useState([]);
@@ -42,66 +46,97 @@ function FaceTimeOverlay({
   }, [messages]);
 
   useEffect(() => {
-    startCamera();
-    return () => streamRef.current?.getTracks().forEach((t) => t.stop());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
+    mountedRef.current = true;
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition || !window.speechSynthesis) {
       setSupported(false);
-      return;
+      return () => {
+        mountedRef.current = false;
+        shutdownCall();
+      };
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      handleTurn(transcript);
+    recognitionConstructorRef.current = SpeechRecognition;
+    return () => {
+      mountedRef.current = false;
+      shutdownCall();
     };
-
-    recognition.onerror = (event) => {
-      if (event.error === "no-speech" || event.error === "aborted") {
-        if (activeRef.current) recognition.start();
-        return;
-      }
-      console.error("Speech recognition error:", event.error);
-      setErrorText("Didn't catch that - tap the camera to resume.");
-      setStatus("Tap the camera to resume FaceTime");
-    };
-
-    recognitionRef.current = recognition;
-    return () => recognition.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function startCamera() {
+  async function startCamera(sessionId) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
         audio: false,
       });
+
+      if (!mountedRef.current || !callActiveRef.current || sessionId !== sessionIdRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return false;
+      }
+
       streamRef.current = stream;
+      if (mountedRef.current) setCameraActive(true);
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
+      return true;
     } catch (err) {
       // A stale play() call getting aborted by a newer one (e.g. React
       // StrictMode's double-invoked effects in dev) isn't a real camera
       // failure - only surface genuine permission/device errors.
-      if (err.name === "AbortError") return;
+      if (err.name === "AbortError") return false;
+      if (!mountedRef.current || !callActiveRef.current || sessionId !== sessionIdRef.current) return false;
       console.error("Camera access failed:", err);
       setCameraError(
         "Couldn't access the camera. Please allow camera permissions.",
       );
+      return false;
     }
+  }
+
+  function stopMedia() {
+    const stream = streamRef.current;
+    streamRef.current = null;
+    stream?.getTracks().forEach((track) => track.stop());
+    if (mountedRef.current) setCameraActive(false);
+
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      video.srcObject = null;
+    }
+  }
+
+  function stopRecognition() {
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    if (!recognition) return;
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+    try {
+      recognition.abort();
+    } catch {
+      try {
+        recognition.stop();
+      } catch {
+        // Recognition was already stopped.
+      }
+    }
+  }
+
+  function shutdownCall() {
+    callActiveRef.current = false;
+    sessionIdRef.current += 1;
+    if (mountedRef.current) setCallActive(false);
+    window.speechSynthesis?.cancel();
+    stopRecognition();
+    stopMedia();
   }
 
   // Grabs whatever the camera is seeing RIGHT NOW - called at the instant a
@@ -118,7 +153,8 @@ function FaceTimeOverlay({
     return canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
   }
 
-  async function handleTurn(transcript) {
+  async function handleTurn(transcript, sessionId) {
+    if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
     setStatus("Thinking…");
     setErrorText("");
     setTurns((prev) => [...prev, { role: "user", content: transcript }]);
@@ -127,6 +163,8 @@ function FaceTimeOverlay({
 
     try {
       let convId = conversationIdRef.current;
+
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
 
       if (!convId) {
         const { conversation, message: userMessage } = await createConversation({
@@ -147,12 +185,16 @@ function FaceTimeOverlay({
       }
 
       const history = toHistory(messagesRef.current);
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
       const { answer, sources, conversationMeta } = await askTyk({
         question: transcript,
         images: frame ? [{ mimeType: "image/jpeg", base64: frame }] : [],
         history,
         conversationId: convId,
+        suppressLearning: true,
       });
+
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
 
       const { message: assistantMessage } = await appendMessage(convId, {
         role: "assistant",
@@ -171,31 +213,76 @@ function FaceTimeOverlay({
   }
 
   function speak(text) {
+    if (!callActiveRef.current) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.onend = () => {
-      if (activeRef.current) {
+      if (callActiveRef.current) {
         setStatus("Listening…");
-        recognitionRef.current?.start();
+        try {
+          recognitionRef.current?.start();
+        } catch {
+          // Recognition may have been stopped between the guard and start.
+        }
       }
     };
     setStatus("Speaking…");
     window.speechSynthesis.speak(utterance);
   }
 
-  function startFaceTime() {
-    setActive(true);
-    activeRef.current = true;
+  async function startFaceTime() {
+    if (callActiveRef.current) return;
+    const sessionId = sessionIdRef.current + 1;
+    sessionIdRef.current = sessionId;
+    callActiveRef.current = true;
+    setCallActive(true);
     setStatus("Listening…");
-    recognitionRef.current?.start();
+    setCameraError("");
+
+    const cameraStarted = await startCamera(sessionId);
+    if (!cameraStarted || !callActiveRef.current || sessionId !== sessionIdRef.current) {
+      shutdownCall();
+      return;
+    }
+
+    const SpeechRecognition = recognitionConstructorRef.current;
+    if (!SpeechRecognition) {
+      shutdownCall();
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+    recognition.onresult = (event) => {
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
+      const transcript = event.results[0][0].transcript;
+      handleTurn(transcript, sessionId);
+    };
+    recognition.onerror = (event) => {
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
+      if (event.error === "no-speech" || event.error === "aborted") return;
+      console.error("Speech recognition error:", event.error);
+      setErrorText("Didn't catch that - tap the camera to resume.");
+      setStatus("Tap the camera to resume FaceTime");
+    };
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error("Speech recognition could not start:", err);
+      shutdownCall();
+    }
   }
 
   function endFaceTime() {
-    setActive(false);
-    activeRef.current = false;
-    window.speechSynthesis.cancel();
-    recognitionRef.current?.stop();
+    shutdownCall();
     setStatus("FaceTime ended");
+  }
+
+  function handleClose() {
+    shutdownCall();
+    onClose();
   }
 
   return (
@@ -203,7 +290,7 @@ function FaceTimeOverlay({
       <div className="call-overlay-panel facetime-panel">
         <div className="call-overlay-header">
           <h2>🎥 FaceTime TYK</h2>
-          <button type="button" onClick={onClose}>
+          <button type="button" onClick={handleClose}>
             ✕
           </button>
         </div>
@@ -216,17 +303,18 @@ function FaceTimeOverlay({
           </div>
         )}
 
-        <div className="vision-camera" onClick={() => (active ? endFaceTime() : startFaceTime())}>
+        <div className="vision-camera" onClick={() => (callActive ? endFaceTime() : startFaceTime())}>
           <video ref={videoRef} className="vision-video" muted playsInline />
           <canvas ref={canvasRef} hidden />
           {supported && (
-            <div className={"facetime-live-badge" + (active ? " on" : "")}>
-              {active ? "● LIVE" : "Tap to start"}
+            <div className={"facetime-live-badge" + (callActive ? " on" : "")}>
+              {callActive ? "● LIVE" : "Tap to start"}
             </div>
           )}
         </div>
 
         <div className="call-status">{status}</div>
+        <div className="call-status">MIC {callActive ? "ACTIVE" : "OFF"} · CAMERA {cameraActive ? "ACTIVE" : "OFF"}</div>
         {errorText && <div className="inline-error">{errorText}</div>}
 
         <div className="call-transcript">
@@ -241,8 +329,8 @@ function FaceTimeOverlay({
         </div>
 
         <p className="call-hint">
-          TYK sees the live camera feed and hears what you say - every turn is
-          saved to this conversation's transcript.
+          TYK sees the live camera feed and hears what you say - active turns
+          are saved to this conversation's transcript.
         </p>
       </div>
     </div>

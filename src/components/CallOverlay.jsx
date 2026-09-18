@@ -20,9 +20,12 @@ function CallOverlay({
   const [errorText, setErrorText] = useState("");
 
   const recognitionRef = useRef(null);
+  const recognitionConstructorRef = useRef(null);
   const conversationIdRef = useRef(conversationId);
   const messagesRef = useRef(messages);
-  const activeRef = useRef(false);
+  const callActiveRef = useRef(false);
+  const sessionIdRef = useRef(0);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
@@ -33,46 +36,61 @@ function CallOverlay({
   }, [messages]);
 
   useEffect(() => {
+    mountedRef.current = true;
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition || !window.speechSynthesis) {
       setSupported(false);
-      return;
+      return () => {
+        mountedRef.current = false;
+        shutdownCall();
+      };
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      handleTurn(transcript);
+    recognitionConstructorRef.current = SpeechRecognition;
+    return () => {
+      mountedRef.current = false;
+      shutdownCall();
     };
-
-    recognition.onerror = (event) => {
-      if (event.error === "no-speech" || event.error === "aborted") {
-        if (activeRef.current) recognition.start();
-        return;
-      }
-      console.error("Speech recognition error:", event.error);
-      setErrorText("Didn't catch that - tap the mic to try again.");
-      setStatus("Tap the mic to resume the call");
-    };
-
-    recognitionRef.current = recognition;
-    return () => recognition.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleTurn(transcript) {
+  function stopRecognition() {
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    if (!recognition) return;
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+    try {
+      recognition.abort();
+    } catch {
+      try {
+        recognition.stop();
+      } catch {
+        // Recognition was already stopped.
+      }
+    }
+  }
+
+  function shutdownCall() {
+    callActiveRef.current = false;
+    sessionIdRef.current += 1;
+    if (mountedRef.current) setActive(false);
+    window.speechSynthesis?.cancel();
+    stopRecognition();
+  }
+
+  async function handleTurn(transcript, sessionId) {
+    if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
     setStatus("Thinking…");
     setErrorText("");
     setLiveTurns((prev) => [...prev, { role: "user", content: transcript }]);
 
     try {
       let convId = conversationIdRef.current;
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
 
       if (!convId) {
         const { conversation, message: userMessage } = await createConversation({
@@ -93,7 +111,15 @@ function CallOverlay({
       }
 
       const history = toHistory(messagesRef.current);
-      const { answer, sources, conversationMeta } = await askTyk({ question: transcript, history, conversationId: convId });
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
+      const { answer, sources, conversationMeta } = await askTyk({
+        question: transcript,
+        history,
+        conversationId: convId,
+        suppressLearning: true,
+      });
+
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
 
       const { message: assistantMessage } = await appendMessage(convId, {
         role: "assistant",
@@ -112,30 +138,66 @@ function CallOverlay({
   }
 
   function speak(text) {
+    if (!callActiveRef.current) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.onend = () => {
-      if (activeRef.current) {
+      if (callActiveRef.current) {
         setStatus("Listening…");
-        recognitionRef.current?.start();
+        try {
+          recognitionRef.current?.start();
+        } catch {
+          // Recognition may have been stopped between the guard and start.
+        }
       }
     };
     window.speechSynthesis.speak(utterance);
   }
 
   function startCall() {
+    if (callActiveRef.current) return;
+    const sessionId = sessionIdRef.current + 1;
+    sessionIdRef.current = sessionId;
+    callActiveRef.current = true;
     setActive(true);
-    activeRef.current = true;
     setStatus("Listening…");
-    recognitionRef.current?.start();
+    const SpeechRecognition = recognitionConstructorRef.current;
+    if (!SpeechRecognition) {
+      shutdownCall();
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+    recognition.onresult = (event) => {
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
+      handleTurn(event.results[0][0].transcript, sessionId);
+    };
+    recognition.onerror = (event) => {
+      if (!callActiveRef.current || sessionId !== sessionIdRef.current) return;
+      if (event.error === "no-speech" || event.error === "aborted") return;
+      console.error("Speech recognition error:", event.error);
+      setErrorText("Didn't catch that - tap the mic to try again.");
+      setStatus("Tap the mic to resume the call");
+    };
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error("Speech recognition could not start:", err);
+      shutdownCall();
+    }
   }
 
   function endCall() {
-    setActive(false);
-    activeRef.current = false;
-    window.speechSynthesis.cancel();
-    recognitionRef.current?.stop();
+    shutdownCall();
     setStatus("Call ended");
+  }
+
+  function handleClose() {
+    shutdownCall();
+    onClose();
   }
 
   return (
@@ -143,7 +205,7 @@ function CallOverlay({
       <div className="call-overlay-panel">
         <div className="call-overlay-header">
           <h2>📞 Call TYK</h2>
-          <button type="button" onClick={onClose}>
+          <button type="button" onClick={handleClose}>
             ✕
           </button>
         </div>
@@ -163,6 +225,7 @@ function CallOverlay({
               {active ? "●" : "🎙"}
             </button>
             <div className="call-status">{status}</div>
+            <div className="call-status">MIC {active ? "ACTIVE" : "OFF"} · CAMERA OFF</div>
             {errorText && <div className="inline-error">{errorText}</div>}
 
             <div className="call-transcript">
