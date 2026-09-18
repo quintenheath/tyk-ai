@@ -516,6 +516,24 @@ Deno.serve(async (req) => {
         const research = await researchWeb(normalizedQuestion);
         if (research) {
           await saveWebResearch(research, conversationId);
+          const sourceLines = research.sources
+            .map((source) => `- ${source.title} (${source.url})`)
+            .join("\n");
+          const researchedAnswer = research.ambiguity
+            ? `${research.answer}\n\nEvidence note: ${research.ambiguity}\n\nSources:\n${sourceLines}`
+            : `${research.answer}\n\nSources:\n${sourceLines}`;
+          if (questionEmbedding && !suppressLearning) {
+            await saveLearnedAnswer({
+              question,
+              normalizedQuestion,
+              intent: "web_research",
+              answer: researchedAnswer,
+              embedding: questionEmbedding,
+              sourceDocumentIds: null,
+              searchTerms: normalizedQuestion.toLowerCase().split(/\W+/).filter((term) => term.length > 2),
+              forceVerified: true,
+            });
+          }
           logAiUsage({
             question: normalizedQuestion,
             intent: "web_research",
@@ -530,9 +548,7 @@ Deno.serve(async (req) => {
           return new Response(
             JSON.stringify({
               success: true,
-              answer: research.ambiguity
-                ? `${research.answer}\n\nEvidence note: ${research.ambiguity}`
-                : research.answer,
+              answer: researchedAnswer,
               sources: webSourceCitations(research.sources).map((source) => ({
                 ...source,
                 confidence: research.confidence,
