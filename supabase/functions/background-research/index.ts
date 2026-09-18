@@ -1,0 +1,645 @@
+// Background Research Engine - TYK keeps learning when nobody is logged in.
+// Runs on a schedule (pg_cron -> pg_net -> this function, see migration),
+// never from the browser. Strictly budget-limited per run and only ever
+// fetches from a small curated set of authoritative sources or a URL the
+// company has already confirmed (a manufacturer/supplier's "website" fact) -
+// this deliberately does NOT crawl the open internet or guess URLs.
+import { generateAnswer } from "../_shared/ai-router.ts";
+import { supabaseAdmin as supabase } from "../_shared/supabase-admin.ts";
+import { hasPermission } from "../_shared/permissions.ts";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+};
+
+// ---------------------------------------------------------------------------
+// Resource limits - background research must never turn into an unbounded
+// crawl or a runaway AI bill.
+// ---------------------------------------------------------------------------
+const MAX_TASKS_PER_RUN = 5;
+const MAX_AI_CALLS_PER_RUN = 5;
+const MAX_WEB_REQUESTS_PER_RUN = 10;
+const MAX_ATTEMPTS = 3;
+const RECHECK_DAYS_CODE = 30;
+const RECHECK_DAYS_SOURCE = 60;
+const RETRY_BACKOFF_DAYS = 3;
+const FETCH_TIMEOUT_MS = 10000;
+
+// Source hierarchy, tier 1 (official government) - the ONLY URLs this engine
+// is allowed to fetch on its own initiative (everything else must come from
+// an already company-confirmed source, e.g. a manufacturer's "website" fact).
+// Deliberately small and curated - "do not blindly crawl the internet".
+const SEED_CODE_SOURCES = [
+  {
+    topic: "Ontario Building Code - official source",
+    url: "https://www.ontario.ca/laws/regulation/120332",
+    sourceType: "government",
+  },
+  {
+    topic: "Ontario Fire Code - official source",
+    url: "https://www.ontario.ca/laws/regulation/070213",
+    sourceType: "government",
+  },
+];
+
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+async function logResearch(entry) {
+  try {
+    await supabase.from("research_log").insert(entry);
+  } catch (err) {
+    console.error("Failed to write research log (ignored):", err);
+  }
+}
+
+function stripHtml(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&amp;|&#\d+;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function fetchWithTimeout(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function sha256(text) {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// ---------------------------------------------------------------------------
+// Task generation - research grows from real knowledge gaps, mirroring Teach
+// TYK's coverage model rather than an arbitrary crawl list.
+// ---------------------------------------------------------------------------
+
+// Ensures the two fixed Ontario code sources are always in the queue -
+// "maintain explicit source coverage" for the core codes, regardless of
+// what's been discovered from conversations yet.
+async function ensureCodeTasks() {
+  for (const source of SEED_CODE_SOURCES) {
+    await supabase.from("research_queue").upsert({
+      topic: source.topic,
+      title: source.topic,
+      description: `Confirm the official ${source.sourceType} source for this code hasn't changed, and store a new version if it has.`,
+      type: "CHANGE_CHECK",
+      entity_id: null,
+      entity_name: null,
+      reason: "Core Ontario code/requirement coverage TYK must maintain.",
+      priority: 8,
+      source_type: source.sourceType,
+      status: "queued",
+    }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
+  }
+}
+
+// Any manufacturer/supplier with a COMPANY-CONFIRMED website but a missing
+// installation_manual/current_catalog becomes a research task - this is the
+// "known: Von Duprin 99 -> unknown: installation manual" pattern from the spec.
+async function generateGapTasks() {
+  const { data: gaps } = await supabase
+    .from("knowledge_facts")
+    .select("id, fact_key, entity_id, knowledge_entities(name, entity_type)")
+    .in("fact_key", ["installation_manual", "current_catalog"])
+    .in("status", ["missing", "uncertain"])
+    .limit(30);
+
+  for (const gap of gaps || []) {
+    const entity = gap.knowledge_entities;
+    if (!entity) continue;
+
+    const { data: website } = await supabase
+      .from("knowledge_facts")
+      .select("fact_value")
+      .eq("entity_id", gap.entity_id)
+      .eq("fact_key", "website")
+      .eq("status", "confirmed")
+      .maybeSingle();
+
+    // No company-confirmed website yet - nothing legitimate to research from.
+    if (!website?.fact_value) continue;
+
+    const label = gap.fact_key === "installation_manual" ? "installation documentation" : "current catalog";
+    const title = `Find ${entity.name}'s ${label}`;
+
+    await supabase.from("research_queue").upsert({
+      topic: title,
+      title,
+      description: `${entity.name} is a company-confirmed ${entity.entity_type} but its ${label} is still missing.`,
+      type: "DOCUMENT",
+      entity_id: gap.entity_id,
+      entity_name: entity.name,
+      reason: `Company knowledge confirms ${entity.name} as a known ${entity.entity_type}, but ${label} is still missing.`,
+      priority: entity.entity_type === "manufacturer" ? 7 : 6,
+      source_type: entity.entity_type === "supplier" ? "supplier" : "manufacturer",
+      status: "queued",
+    }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
+  }
+}
+
+// If there's genuinely no fresh knowledge gap to chase right now, TYK falls
+// back to real maintenance work instead of ever sitting idle - "never
+// intentionally empty" without inventing meaningless busywork. Every task
+// here does something real and checkable, never a fake placeholder question.
+async function generateMaintenanceTasks() {
+  await supabase.from("research_queue").upsert({
+    topic: "Verify all indexed source URLs are still reachable",
+    title: "Verify all indexed source URLs are still reachable",
+    description: "Check every currently-indexed document's source_url with a lightweight request and flag any that no longer respond.",
+    type: "VERIFY",
+    entity_id: null,
+    entity_name: null,
+    reason: "Routine maintenance - links break over time; TYK should notice before a user does.",
+    priority: 3,
+    source_type: "other",
+    status: "queued",
+  }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
+
+  await supabase.from("research_queue").upsert({
+    topic: "Review knowledge entities with no confirmed facts yet",
+    title: "Review knowledge entities with no confirmed facts yet",
+    description: "Identify manufacturers/suppliers/products TYK knows by name but has no confirmed facts for, so they can be prioritized for Teach TYK or research.",
+    type: "MAINTENANCE",
+    entity_id: null,
+    entity_name: null,
+    reason: "Routine maintenance - surfaces knowledge gaps that don't fit the installation-manual/catalog pattern.",
+    priority: 2,
+    source_type: "other",
+    status: "queued",
+  }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
+}
+
+// Item 7 - "when a pending item is completed, evaluate what should be
+// learned next": a small deterministic chain (no AI) so completing one task
+// naturally spawns the next logical one, instead of the queue just shrinking
+// to zero over time.
+async function replenishAfterCompletion(task) {
+  if (!task.entity_id || !task.entity_name) return;
+
+  if (task.type === "DOCUMENT" && /installation documentation/i.test(task.topic)) {
+    const title = `Find ${task.entity_name}'s current catalog`;
+    await supabase.from("research_queue").upsert({
+      topic: title,
+      title,
+      description: `Follow-up to finding ${task.entity_name}'s installation documentation - the current catalog is the next useful document to locate.`,
+      type: "DOCUMENT",
+      entity_id: task.entity_id,
+      entity_name: task.entity_name,
+      reason: "Auto-generated follow-up after completing a related research task.",
+      priority: (task.priority || 5) - 1,
+      source_type: task.source_type,
+      status: "queued",
+    }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
+  } else if (task.type === "DOCUMENT" && /current catalog/i.test(task.topic)) {
+    const title = `Verify ${task.entity_name}'s catalog is the current edition`;
+    await supabase.from("research_queue").upsert({
+      topic: title,
+      title,
+      description: `Follow-up to finding ${task.entity_name}'s catalog - confirm it's still the latest edition available.`,
+      type: "VERIFY",
+      entity_id: task.entity_id,
+      entity_name: task.entity_name,
+      reason: "Auto-generated follow-up after completing a related research task.",
+      priority: (task.priority || 5) - 1,
+      source_type: task.source_type,
+      status: "queued",
+    }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task execution
+// ---------------------------------------------------------------------------
+
+async function researchCodeSource(task, budget) {
+  const source = SEED_CODE_SOURCES.find((s) => s.topic === task.topic);
+  if (!source) return { result: "No matching seed source.", failures: "unknown code task" };
+  if (budget.webRequests >= MAX_WEB_REQUESTS_PER_RUN) {
+    return { result: "Skipped - web request budget exhausted for this run.", deferred: true };
+  }
+
+  budget.webRequests++;
+  let html;
+  try {
+    html = await fetchWithTimeout(source.url);
+  } catch (err) {
+    return { result: null, failures: `Fetch failed: ${err.message}` };
+  }
+
+  const text = stripHtml(html).slice(0, 20000);
+  const hash = await sha256(text);
+
+  const { data: existing } = await supabase
+    .from("documents")
+    .select("id, auto_metadata, chunk_count")
+    .eq("source_url", source.url)
+    .eq("is_current", true)
+    .maybeSingle();
+
+  const previousHash = existing?.auto_metadata?.content_hash;
+  const changed = previousHash && previousHash !== hash;
+  const isNew = !existing;
+
+  if (isNew) {
+    await supabase.from("documents").insert({
+      name: source.topic,
+      description: "Auto-discovered by TYK background research.",
+      file_path: null,
+      status: "indexed",
+      chunk_count: 0,
+      source_type: source.sourceType,
+      source_url: source.url,
+      is_current: true,
+      auto_metadata: { content_hash: hash, discovered_by: "background_research" },
+    });
+  } else if (changed) {
+    // Never silently overwrite - the old row is kept, marked superseded.
+    await supabase.from("documents").update({ is_current: false }).eq("id", existing.id);
+    const { data: newDoc } = await supabase.from("documents").insert({
+      name: source.topic,
+      description: "Auto-discovered by TYK background research (updated).",
+      status: "indexed",
+      chunk_count: 0,
+      source_type: source.sourceType,
+      source_url: source.url,
+      is_current: true,
+      previous_version_id: existing.id,
+      auto_metadata: { content_hash: hash, discovered_by: "background_research" },
+    }).select().single();
+    return {
+      result: `Change detected at official source - new version stored (previous kept as history).`,
+      documentsFound: 1,
+      changesDiscovered: { previousDocumentId: existing.id, newDocumentId: newDoc?.id },
+    };
+  } else if (existing) {
+    return { result: "No change since last check.", documentsFound: 0 };
+  }
+
+  return { result: isNew ? "First discovery of this official source." : "Recorded.", documentsFound: isNew ? 1 : 0 };
+}
+
+// Finds obvious PDF links (installation manual / catalog) on a company-
+// confirmed manufacturer/supplier website - pure regex, zero AI, matches
+// "do not use AI for simple deterministic extraction".
+function findPdfCandidates(html, baseUrl) {
+  const links = [...html.matchAll(/<a\s+[^>]*href=["']([^"']+\.pdf[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)];
+  return links.slice(0, 15).map((m) => {
+    let href = m[1];
+    try {
+      href = new URL(href, baseUrl).toString();
+    } catch {
+      // leave as-is if it can't be resolved
+    }
+    return { url: href, label: stripHtml(m[2]).slice(0, 120) };
+  });
+}
+
+async function researchEntitySource(task, budget) {
+  const { data: website } = await supabase
+    .from("knowledge_facts")
+    .select("fact_value")
+    .eq("entity_id", task.entity_id)
+    .eq("fact_key", "website")
+    .eq("status", "confirmed")
+    .maybeSingle();
+
+  if (!website?.fact_value) {
+    return { result: null, failures: "No company-confirmed website to research from." };
+  }
+
+  if (budget.webRequests >= MAX_WEB_REQUESTS_PER_RUN) {
+    return { result: "Skipped - web request budget exhausted for this run.", deferred: true };
+  }
+
+  budget.webRequests++;
+  let html;
+  try {
+    html = await fetchWithTimeout(website.fact_value);
+  } catch (err) {
+    return { result: null, failures: `Fetch failed: ${err.message}` };
+  }
+
+  const candidates = findPdfCandidates(html, website.fact_value);
+  if (candidates.length === 0) {
+    return { result: "No installation/catalog documents found on the confirmed website.", documentsFound: 0 };
+  }
+
+  const wantsManual = /installation/i.test(task.topic);
+  const relevant = candidates.filter((c) =>
+    wantsManual
+      ? /install|manual|template/i.test(c.label + c.url)
+      : /catalog|brochure/i.test(c.label + c.url)
+  );
+  const pool = relevant.length ? relevant : candidates;
+
+  let chosen = pool[0];
+  let aiUsed = false;
+  // AI only breaks a genuine tie among plausible candidates - never used for
+  // the deterministic PDF-link extraction itself.
+  if (pool.length > 1 && budget.aiCalls < MAX_AI_CALLS_PER_RUN) {
+    budget.aiCalls++;
+    aiUsed = true;
+    try {
+      const prompt = `TYK is looking for ${task.entity_name}'s ${wantsManual ? "installation manual" : "current catalog"} on their official website.\n\nCandidate PDF links found:\n${
+        pool.map((c, i) => `${i}: ${c.label} (${c.url})`).join("\n")
+      }\n\nRespond with ONLY the index number of the single best match.`;
+      const { answer } = await generateAnswer(prompt);
+      const idx = parseInt(answer.trim().match(/\d+/)?.[0] ?? "", 10);
+      if (Number.isInteger(idx) && pool[idx]) chosen = pool[idx];
+    } catch (err) {
+      console.error("AI tie-break failed for research task (using first candidate):", err);
+    }
+  }
+
+  const factKey = wantsManual ? "installation_manual" : "current_catalog";
+
+  await supabase.from("knowledge_facts").upsert({
+    entity_id: task.entity_id,
+    fact_key: factKey,
+    fact_value: chosen.url,
+    status: "confirmed",
+    // A background-discovered link is a verified-source fact, NOT yet
+    // company-confirmed/approved - a human still needs to look at it.
+    research_state: "verified_source",
+    source_type: "background_research",
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "entity_id,fact_key" });
+
+  return {
+    result: `Found candidate ${factKey.replace("_", " ")} at ${chosen.url}${aiUsed ? " (AI tie-break used)" : ""}.`,
+    documentsFound: 1,
+    aiUsed,
+  };
+}
+
+// Deterministic (zero-AI) maintenance work - the "if knowledge is already
+// complete, switch to maintenance/research tasks" fallback. Every check here
+// is a real HTTP/DB check, never a fabricated question.
+async function runMaintenanceTask(task, budget) {
+  if (/verify all indexed source urls/i.test(task.topic)) {
+    const { data: docs } = await supabase
+      .from("documents")
+      .select("id, name, source_url")
+      .eq("is_current", true)
+      .not("source_url", "is", null)
+      .limit(20);
+
+    if (!docs?.length) return { result: "No source URLs indexed yet to verify.", documentsFound: 0 };
+
+    let broken = 0;
+    for (const doc of docs) {
+      if (budget.webRequests >= MAX_WEB_REQUESTS_PER_RUN) break;
+      budget.webRequests++;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+        const res = await fetch(doc.source_url, { method: "HEAD", signal: controller.signal });
+        clearTimeout(timeout);
+        if (!res.ok) broken++;
+      } catch {
+        broken++;
+      }
+    }
+
+    return {
+      result: broken > 0
+        ? `Checked ${docs.length} source URL(s) - ${broken} no longer responded correctly.`
+        : `Checked ${docs.length} source URL(s) - all still reachable.`,
+      documentsFound: 0,
+      changesDiscovered: broken > 0 ? { brokenCount: broken } : null,
+    };
+  }
+
+  if (/review knowledge entities with no confirmed facts/i.test(task.topic)) {
+    const { data: entities } = await supabase
+      .from("knowledge_entities")
+      .select("id, name, entity_type, knowledge_facts(status)")
+      .limit(100);
+
+    const gaps = (entities || []).filter(
+      (e) => !(e.knowledge_facts || []).some((f) => f.status === "confirmed"),
+    );
+
+    return {
+      result: gaps.length
+        ? `${gaps.length} entit${gaps.length === 1 ? "y has" : "ies have"} no confirmed facts yet: ${
+          gaps.slice(0, 5).map((e) => e.name).join(", ")
+        }${gaps.length > 5 ? ", ..." : ""}.`
+        : "Every known entity already has at least one confirmed fact.",
+      documentsFound: 0,
+    };
+  }
+
+  return { result: "No matching maintenance task handler.", failures: "unknown maintenance task" };
+}
+
+async function runResearch() {
+  await ensureCodeTasks();
+  await generateGapTasks();
+
+  const { count: queuedCount } = await supabase
+    .from("research_queue")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "queued");
+  if (!queuedCount) {
+    // Nothing fresh to chase - fall back to real maintenance work rather
+    // than ever leaving the queue empty.
+    await generateMaintenanceTasks();
+  }
+
+  const { data: tasks } = await supabase
+    .from("research_queue")
+    .select("*")
+    .in("status", ["queued", "failed"])
+    .lt("attempts", MAX_ATTEMPTS)
+    .or(`next_research_date.is.null,next_research_date.lte.${new Date().toISOString()}`)
+    .order("priority", { ascending: false })
+    .order("updated_at", { ascending: true })
+    .limit(MAX_TASKS_PER_RUN);
+
+  const budget = { aiCalls: 0, webRequests: 0 };
+  const summary = { tasksRun: 0, documentsFound: 0, knowledgeCreated: 0, failures: 0 };
+
+  for (const task of tasks || []) {
+    if (budget.webRequests >= MAX_WEB_REQUESTS_PER_RUN) break;
+
+    await supabase.from("research_queue").update({ status: "researching" }).eq("id", task.id);
+
+    const isCodeSource = SEED_CODE_SOURCES.some((s) => s.topic === task.topic);
+    let outcome;
+    try {
+      outcome = task.entity_id
+        ? await researchEntitySource(task, budget)
+        : isCodeSource
+        ? await researchCodeSource(task, budget)
+        : await runMaintenanceTask(task, budget);
+    } catch (err) {
+      outcome = { result: null, failures: err.message };
+    }
+
+    summary.tasksRun++;
+    if (outcome.documentsFound) summary.documentsFound += outcome.documentsFound;
+    if (outcome.failures) summary.failures++;
+
+    const attempts = (task.attempts || 0) + (outcome.failures ? 1 : 0);
+    const nextStatus = outcome.deferred
+      ? "queued"
+      : outcome.failures
+      ? (attempts >= MAX_ATTEMPTS ? "failed" : "queued")
+      : "done";
+    const recheckDays = task.source_type === "government" ? RECHECK_DAYS_CODE : RECHECK_DAYS_SOURCE;
+    const nextDate = new Date(
+      Date.now() + (outcome.failures ? RETRY_BACKOFF_DAYS : recheckDays) * 86400000,
+    ).toISOString();
+
+    await supabase.from("research_queue").update({
+      status: nextStatus,
+      attempts,
+      result: outcome.result || null,
+      last_researched_at: new Date().toISOString(),
+      next_research_date: outcome.deferred ? task.next_research_date : nextDate,
+      updated_at: new Date().toISOString(),
+    }).eq("id", task.id);
+
+    if (nextStatus === "done") {
+      await replenishAfterCompletion(task);
+    }
+
+    await logResearch({
+      task_id: task.id,
+      task_topic: task.topic,
+      source: task.entity_id ? "company-confirmed website" : SEED_CODE_SOURCES.find((s) => s.topic === task.topic)?.url,
+      source_type: task.source_type,
+      result: outcome.result,
+      documents_found: outcome.documentsFound || 0,
+      knowledge_created: outcome.documentsFound ? 1 : 0,
+      ai_calls: outcome.aiUsed ? 1 : 0,
+      failures: outcome.failures || null,
+      changes_discovered: outcome.changesDiscovered || null,
+    });
+  }
+
+  return summary;
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+
+    if (body.action === "queue") {
+      // Viewable by either research-dashboard access or company-knowledge
+      // approval access - the Settings "pending" panel falls back to
+      // showing active queue work for approvers who don't have the full
+      // Research dashboard permission.
+      if (
+        !(await hasPermission(body, "can_view_research")) &&
+        !(await hasPermission(body, "can_approve_company_knowledge"))
+      ) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const { data, error } = await supabase
+        .from("research_queue")
+        .select("*")
+        .order("priority", { ascending: false })
+        .order("updated_at", { ascending: false })
+        .limit(100);
+      if (error) return json({ error: error.message }, 500);
+      return json({ queue: data || [] });
+    }
+
+    if (body.action === "log") {
+      if (!(await hasPermission(body, "can_view_research"))) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const { data, error } = await supabase
+        .from("research_log")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (error) return json({ error: error.message }, 500);
+      return json({ log: data || [] });
+    }
+
+    // Admin-only internal health snapshot - never exposed to normal users,
+    // deliberately reports STATUS ONLY (never raw provider errors/stack
+    // traces) so an admin can see the system is healthy without leaking
+    // anything a normal user-facing error message wouldn't already hide.
+    if (body.action === "health") {
+      if (!(await hasPermission(body, "can_view_research"))) {
+        return json({ error: "Forbidden" }, 403);
+      }
+
+      const [
+        { count: queueTotal },
+        { count: queueQueued },
+        { data: lastLog },
+        { data: providers },
+        { data: buckets },
+        { count: documentCount },
+      ] = await Promise.all([
+        supabase.from("research_queue").select("id", { count: "exact", head: true }),
+        supabase.from("research_queue").select("id", { count: "exact", head: true }).eq("status", "queued"),
+        supabase.from("research_log").select("created_at").order("created_at", { ascending: false }).limit(1),
+        supabase.from("provider_health").select("provider, available, cooldown_until, last_success"),
+        supabase.storage.listBuckets(),
+        supabase.from("documents").select("id", { count: "exact", head: true }),
+      ]);
+
+      const now = Date.now();
+      return json({
+        health: {
+          database: "ok",
+          documentStorage: buckets?.length ? "ok" : "unknown",
+          documentsIndexed: documentCount || 0,
+          researchQueue: {
+            total: queueTotal || 0,
+            queued: queueQueued || 0,
+            lastRun: lastLog?.[0]?.created_at || null,
+          },
+          aiProviders: (providers || []).map((p) => ({
+            provider: p.provider,
+            status: p.cooldown_until && new Date(p.cooldown_until).getTime() > now
+              ? "cooling_down"
+              : p.available
+              ? "ok"
+              : "unavailable",
+            lastSuccess: p.last_success,
+          })),
+        },
+      });
+    }
+
+    // Default: this is the scheduled entry point (pg_cron -> pg_net), and
+    // also callable manually by an admin for on-demand research.
+    const summary = await runResearch();
+    return json({ ok: true, summary });
+  } catch (err) {
+    console.error("background-research error:", err);
+    return json({ error: err.message || "Unexpected error" }, 500);
+  }
+});
