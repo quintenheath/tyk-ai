@@ -32,5 +32,8 @@ export async function askTyk({
   return {
     answer: data?.answer || data?.message || "TYK couldn't generate an answer.",
     sources: data?.sources || [],
+    conversationMeta: data?.conversationMeta || null,
+    needsWebResearch: Boolean(data?.needsWebResearch),
+    researchReason: data?.researchReason || null,
   };
 }

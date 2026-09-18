@@ -119,10 +119,10 @@ function App() {
         setMessages([userMessage]);
         setConversations((prev) => [conversation, ...prev]);
 
-        const { answer, sources } = await askTyk(question, documentIds);
+        const { answer, sources, conversationMeta } = await askTyk(question, documentIds);
         const { message: assistantMessage } = await appendMessage(
           conversation.id,
-          { role: "assistant", content: answer, metadata: { sources } },
+          { role: "assistant", content: answer, metadata: { sources, conversationMeta } },
           identity,
         );
 
@@ -140,10 +140,10 @@ function App() {
         );
         setMessages((prev) => [...prev, userMessage]);
 
-        const { answer, sources } = await askTyk(question, documentIds);
+        const { answer, sources, conversationMeta } = await askTyk(question, documentIds);
         const { message: assistantMessage } = await appendMessage(
           activeConversationId,
-          { role: "assistant", content: answer, metadata: { sources } },
+          { role: "assistant", content: answer, metadata: { sources, conversationMeta } },
           identity,
         );
 

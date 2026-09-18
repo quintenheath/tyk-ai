@@ -9,6 +9,11 @@ import {
 import { getActiveConnector } from "../_shared/connected-sources/registry.ts";
 import { SourceNotConnectedError } from "../_shared/connected-sources/types.ts";
 import {
+  findSavedWebSource,
+  researchWeb,
+  saveWebResearch,
+} from "../_shared/web-research.ts";
+import {
   estimateTokens,
   logAiUsage,
   normalizeQuestion,
@@ -24,6 +29,7 @@ const corsHeaders = {
 };
 
 const MAX_KNOWLEDGE_CHUNKS = 6;
+const RELIABLE_KNOWLEDGE_SIMILARITY = 0.72;
 
 // Deterministic domain -> connected source mapping. No AI needed to know
 // that a fire-code question should check NFPA LiNK before falling through.
@@ -134,6 +140,40 @@ function buildPartialAnswer(knowledgeChunks) {
   return `Here's what I have on file:\n\n${excerpts}`;
 }
 
+function decideWebResearch(isPlainTextQuestion, knowledgeChunks) {
+  if (!isPlainTextQuestion) {
+    return {
+      needsWebResearch: false,
+      reason: "Images or attached documents require their own reasoning path.",
+    };
+  }
+
+  const bestSimilarity = knowledgeChunks[0]?.similarity || 0;
+  if (bestSimilarity >= RELIABLE_KNOWLEDGE_SIMILARITY) {
+    return {
+      needsWebResearch: false,
+      reason: "TYK found a reliable internal knowledge match.",
+    };
+  }
+
+  return {
+    needsWebResearch: true,
+    reason: knowledgeChunks.length
+      ? "Internal matches were below the reliability threshold."
+      : "No relevant internal knowledge was found.",
+  };
+}
+
+function webSourceCitations(sources) {
+  return (sources || []).map((source) => ({
+    document: source.title,
+    url: source.url,
+    domain: source.domain,
+    sourceType: source.sourceType || "web_search",
+    confidence: source.confidence,
+  }));
+}
+
 // Records a genuinely unanswerable question so Teach TYK can prioritize
 // closing this exact gap later - AI unavailability never loses the question.
 async function saveUnansweredQuestion(question) {
@@ -186,8 +226,12 @@ async function findCompanyKnowledgeForVisualAnswer(visionAnswer) {
   return lines.length ? lines.join("\n") : null;
 }
 
-function buildPrompt(question, knowledgeChunks, attachedDocuments, history, summary) {
+function buildPrompt(question, knowledgeChunks, attachedDocuments, history, summary, topicSummary) {
   let context = "";
+
+  if (topicSummary) {
+    context += "\n\nCONVERSATION TOPIC SUMMARY (compact context):\n" + topicSummary + "\n";
+  }
 
   if (summary) {
     context += "\n\nEARLIER CONVERSATION SUMMARY (older turns already condensed):\n" + summary + "\n";
@@ -306,6 +350,8 @@ Deno.serve(async (req) => {
             model: "none",
             sources: [],
             aiRequired: false,
+            needsWebResearch: false,
+            researchReason: "A deterministic TYK lookup answered the question.",
           }),
           {
             status: 200,
@@ -359,6 +405,8 @@ Deno.serve(async (req) => {
             model: "none",
             sources: reusedSources,
             aiRequired: false,
+            needsWebResearch: false,
+            researchReason: "A verified learned answer matched the question.",
           }),
           {
             status: 200,
@@ -407,6 +455,8 @@ Deno.serve(async (req) => {
             answer: sourceResult.answer,
             sources: [{ document: sourceResult.citation }],
             aiRequired: false,
+            needsWebResearch: false,
+            researchReason: "A connected authoritative source answered the question.",
           }),
           {
             status: 200,
@@ -416,25 +466,119 @@ Deno.serve(async (req) => {
       }
     }
 
+    const researchDecision = decideWebResearch(isPlainTextQuestion, knowledgeChunks);
+
+    if (isPlainTextQuestion && researchDecision.needsWebResearch) {
+      const savedSource = await findSavedWebSource(normalizedQuestion);
+      if (savedSource) {
+        logAiUsage({
+          question: normalizedQuestion,
+          intent: "saved_web_source",
+          source_used: "saved_external_source",
+          ai_required: false,
+          latency_ms: Date.now() - startedAt,
+        });
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            answer: savedSource.answer,
+            sources: [{
+              document: savedSource.title || savedSource.domain,
+              url: savedSource.url,
+              domain: savedSource.domain,
+              sourceType: savedSource.source_type,
+              confidence: savedSource.confidence,
+            }],
+            aiRequired: false,
+            needsWebResearch: false,
+            researchReason: "A previously saved external source matched.",
+            conversationMeta: {
+              title: savedSource.title,
+              topicSummary: savedSource.topic,
+              source: "saved_web_source",
+            },
+          }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
+    }
+
+    if (researchDecision.needsWebResearch) {
+      try {
+        const research = await researchWeb(normalizedQuestion);
+        if (research) {
+          await saveWebResearch(research, conversationId);
+          logAiUsage({
+            question: normalizedQuestion,
+            intent: "web_research",
+            source_used: research.provider,
+            ai_required: true,
+            provider: research.provider,
+            model: research.model,
+            output_tokens_estimate: estimateTokens(research.answer),
+            latency_ms: Date.now() - startedAt,
+          });
+
+          return new Response(
+            JSON.stringify({
+              success: true,
+              answer: research.answer,
+              sources: webSourceCitations(research.sources).map((source) => ({
+                ...source,
+                confidence: research.confidence,
+              })),
+              aiRequired: true,
+              needsWebResearch: true,
+              researchReason: researchDecision.reason,
+              conversationMeta: {
+                title: research.title,
+                topicSummary: research.topicSummary,
+                source: "web_research",
+              },
+            }),
+            {
+              status: 200,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            },
+          );
+        }
+      } catch (err) {
+        console.error("Web research failed (falling through to AI):", err);
+      }
+    }
+
     // Older turns beyond the last few (already sent verbatim in `history`)
     // are folded into a running summary by conversation-store as the chat
     // grows, so long conversations keep real continuity without the raw
     // history sent to AI ever growing unbounded.
     let conversationSummary = null;
+    let conversationTopicSummary = null;
     if (conversationId) {
       try {
         const { data } = await supabaseAdmin
           .from("conversations")
-          .select("summary")
+          .select("summary, topic_summary")
           .eq("id", conversationId)
           .maybeSingle();
         conversationSummary = data?.summary || null;
+        conversationTopicSummary = data?.topic_summary || null;
       } catch (err) {
         console.error("Failed to load conversation summary (ignored):", err);
       }
     }
 
-    const prompt = buildPrompt(normalizedQuestion, knowledgeChunks, attachedDocuments, history, conversationSummary);
+    const prompt = buildPrompt(
+      normalizedQuestion,
+      knowledgeChunks,
+      attachedDocuments,
+      history,
+      conversationSummary,
+      conversationTopicSummary,
+    );
 
     let answer, provider, model, failedProviders;
     try {
@@ -479,6 +623,8 @@ Deno.serve(async (req) => {
             }))
             : [],
           aiRequired: true,
+            needsWebResearch: researchDecision.needsWebResearch,
+            researchReason: researchDecision.reason,
         }),
         {
           status: 200,
@@ -565,6 +711,8 @@ Deno.serve(async (req) => {
         answer: finalAnswer,
         sources,
         aiRequired: true,
+        needsWebResearch: researchDecision.needsWebResearch,
+        researchReason: researchDecision.reason,
       }),
       {
         status: 200,

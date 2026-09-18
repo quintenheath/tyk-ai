@@ -21,11 +21,53 @@ const corsHeaders = {
 };
 
 function titleFromMessage(content) {
-  const clean = content.trim().replace(/\s+/g, " ");
-  if (clean.length <= 48) return clean;
-  const truncated = clean.slice(0, 48);
+  const clean = content
+    .trim()
+    .replace(/^(what is|what are|who is|where is|how does|how do|can you explain)\s+/i, "")
+    .replace(/[?.!]+$/, "")
+    .replace(/\s+/g, " ");
+  const title = clean ? clean.charAt(0).toUpperCase() + clean.slice(1) : "New conversation";
+  if (title.length <= 56) return title;
+  const truncated = title.slice(0, 56);
   const lastSpace = truncated.lastIndexOf(" ");
   return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "…";
+}
+
+function topicSummaryFromMessage(content) {
+  const clean = content.trim().replace(/\s+/g, " ").replace(/[?.!]+$/, "");
+  return clean ? `Discussion about ${clean}.` : null;
+}
+
+function isPlaceholderTitle(title) {
+  return !title || /^(what|how|can|does|is|why|where|who)\b/i.test(title);
+}
+
+async function maybeUpdateConversationMetadata(conversationId, metadata) {
+  const suggestion = metadata?.conversationMeta;
+  if (!suggestion?.title && !suggestion?.topicSummary) return;
+
+  const { data: current } = await supabase
+    .from("conversations")
+    .select("title, topic_summary")
+    .eq("id", conversationId)
+    .maybeSingle();
+  if (!current) return;
+
+  const isResearch = suggestion.source === "web_research" ||
+    suggestion.source === "saved_web_source";
+  if (!isResearch && !isPlaceholderTitle(current.title)) {
+    return;
+  }
+
+  await supabase
+    .from("conversations")
+    .update({
+      ...(suggestion.title ? { title: suggestion.title.trim() } : {}),
+      ...(suggestion.topicSummary
+        ? { topic_summary: suggestion.topicSummary.trim() }
+        : {}),
+    })
+    .eq("id", conversationId);
 }
 
 function json(body, status = 200) {
@@ -135,7 +177,7 @@ Deno.serve(async (req) => {
 
       const { data, error } = await supabase
         .from("conversations")
-        .select("id, title, created_at, updated_at")
+        .select("id, title, topic_summary, created_at, updated_at")
         .eq(owner.column, owner.value)
         .order("updated_at", { ascending: false });
 
@@ -153,7 +195,7 @@ Deno.serve(async (req) => {
 
       const { data, error } = await supabase
         .from("conversations")
-        .select("id, title, updated_at")
+        .select("id, title, topic_summary, updated_at")
         .eq(owner.column, owner.value)
         .ilike("title", `%${query}%`)
         .order("updated_at", { ascending: false })
@@ -194,6 +236,7 @@ Deno.serve(async (req) => {
         .from("conversations")
         .insert({
           title: titleFromMessage(firstMessage.content),
+          topic_summary: topicSummaryFromMessage(firstMessage.content),
           [owner.column]: owner.value,
         })
         .select()
@@ -255,6 +298,7 @@ Deno.serve(async (req) => {
       if (typeof EdgeRuntime !== "undefined") {
         EdgeRuntime.waitUntil(summarizePromise);
       }
+      await maybeUpdateConversationMetadata(conversation_id, message.metadata);
 
       return json({ message: inserted });
     }
