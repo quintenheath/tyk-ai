@@ -93,12 +93,12 @@ function CallOverlay({
       }
 
       const history = toHistory(messagesRef.current);
-      const { answer, sources } = await askTyk({ question: transcript, history, conversationId: convId });
+      const { answer, sources, conversationMeta } = await askTyk({ question: transcript, history, conversationId: convId });
 
       const { message: assistantMessage } = await appendMessage(convId, {
         role: "assistant",
         content: answer,
-        metadata: { mode: "voice", sources },
+        metadata: { mode: "voice", sources, conversationMeta },
       }, identity);
       onMessageAppended(assistantMessage);
       setLiveTurns((prev) => [...prev, { role: "assistant", content: answer }]);

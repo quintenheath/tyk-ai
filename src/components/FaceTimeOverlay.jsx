@@ -147,7 +147,7 @@ function FaceTimeOverlay({
       }
 
       const history = toHistory(messagesRef.current);
-      const { answer, sources } = await askTyk({
+      const { answer, sources, conversationMeta } = await askTyk({
         question: transcript,
         images: frame ? [{ mimeType: "image/jpeg", base64: frame }] : [],
         history,
@@ -157,7 +157,7 @@ function FaceTimeOverlay({
       const { message: assistantMessage } = await appendMessage(convId, {
         role: "assistant",
         content: answer,
-        metadata: { mode: "vision", sources },
+        metadata: { mode: "vision", sources, conversationMeta },
       }, identity);
       onMessageAppended(assistantMessage);
       setTurns((prev) => [...prev, { role: "assistant", content: answer }]);
