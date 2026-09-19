@@ -793,7 +793,7 @@ async function runMaintenanceTask(task, budget) {
   return { result: "No matching maintenance task handler.", failures: "unknown maintenance task" };
 }
 
-async function runResearch() {
+async function runResearch(cycleDepth = 0) {
   await ensureCodeTasks();
   await ensureResearchAreaTasks();
   await generateGapTasks();
@@ -902,6 +902,20 @@ async function runResearch() {
   }
 
   summary.queueReplenished = await ensureMinimumQueue();
+
+  // The scheduler starts the worker, but it must not be the throttle between
+  // objectives. Continue immediately through a bounded number of sequential
+  // claims; the atomic claim function still guarantees only one active task.
+  if (cycleDepth < 4 && summary.tasksRun > 0) {
+    const next = await runResearch(cycleDepth + 1);
+    return {
+      tasksRun: summary.tasksRun + (next.tasksRun || 0),
+      documentsFound: summary.documentsFound + (next.documentsFound || 0),
+      knowledgeCreated: summary.knowledgeCreated + (next.knowledgeCreated || 0),
+      failures: summary.failures + (next.failures || 0),
+      queueReplenished: (summary.queueReplenished || 0) + (next.queueReplenished || 0),
+    };
+  }
 
   return summary;
 }
@@ -1111,6 +1125,10 @@ Deno.serve(async (req) => {
     // also callable manually by an admin for on-demand research.
     if (!body.token) {
       const cadence = await getResearchCadence();
+      const [{ count: activeCount }, { count: queuedCount }] = await Promise.all([
+        supabase.from("research_queue").select("id", { count: "exact", head: true }).eq("status", "researching"),
+        supabase.from("research_queue").select("id", { count: "exact", head: true }).in("status", ["queued", "reverify", "failed"]),
+      ]);
       const { data: latest } = await supabase
         .from("research_log")
         .select("created_at")
@@ -1118,7 +1136,7 @@ Deno.serve(async (req) => {
         .limit(1)
         .maybeSingle();
       const elapsed = latest ? Date.now() - new Date(latest.created_at).getTime() : Infinity;
-      if (elapsed < cadence.hours * 60 * 60 * 1000) {
+      if (activeCount || (!queuedCount && elapsed < cadence.hours * 60 * 60 * 1000)) {
         return json({
           ok: true,
           skipped: true,
