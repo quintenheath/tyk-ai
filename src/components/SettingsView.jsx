@@ -45,9 +45,15 @@ function SettingsView({ identity }) {
   }, []);
 
   async function loadPending() {
+    let items = [];
     try {
-      const items = await listPendingPromotions(identity);
-      setPending(items);
+      items = await listPendingPromotions(identity);
+    } catch (err) {
+      console.error("Failed to load pending company knowledge:", err);
+    }
+    setPending(items);
+
+    try {
       const { data, error } = await supabase.functions.invoke("background-research", {
         body: { action: "queue", token: identity?.token },
       });
@@ -58,7 +64,7 @@ function SettingsView({ identity }) {
         setActiveWork(work.slice(0, 8));
       }
     } catch (err) {
-      console.error("Failed to load pending company knowledge:", err);
+      console.error("Failed to load research backlog:", err);
     }
   }
 
