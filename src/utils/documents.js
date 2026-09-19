@@ -57,6 +57,10 @@ export async function verifyDocument(documentId, identity) {
   return invokeDocumentManager({ action: "verify", document_id: documentId, ...ownerParams(identity) });
 }
 
+export async function listDocumentVersions(documentId, identity) {
+  return invokeDocumentManager({ action: "versions", document_id: documentId, ...ownerParams(identity) });
+}
+
 // Uploads a file directly to storage via a signed URL, then triggers
 // server-side processing (extract -> chunk -> embed -> auto-classify).
 // TYK determines manufacturer/product/document type itself; the user never

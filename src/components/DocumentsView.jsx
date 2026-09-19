@@ -7,6 +7,7 @@ import {
   exportEverything,
   exportTykKnowledge,
   listDocuments,
+  listDocumentVersions,
   uploadDocument,
   verifyDocument,
 } from "../utils/documents";
@@ -33,6 +34,7 @@ function DocumentsView({ identity }) {
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState("");
   const [errorText, setErrorText] = useState("");
+  const [versions, setVersions] = useState(null);
   const fileInputRef = useRef(null);
   const canUpload = identity?.permissions?.can_upload_documents;
   const canManage = identity?.permissions?.can_manage_documents;
@@ -139,6 +141,16 @@ function DocumentsView({ identity }) {
     }
   }
 
+  async function handleVersions(documentId) {
+    try {
+      const result = await listDocumentVersions(documentId, identity);
+      setVersions({ documentId, items: result.versions || [] });
+    } catch (err) {
+      console.error("Version history failed:", err);
+      setErrorText("Could not load document versions.");
+    }
+  }
+
   return (
     <main className="documents-main">
       <div className="documents-header">
@@ -180,6 +192,24 @@ function DocumentsView({ identity }) {
       </div>
 
       {errorText && <div className="inline-error">{errorText}</div>}
+
+      {versions && (
+        <div className="teach-history">
+          <div className="teach-history-label">Document versions</div>
+          {versions.items.map((version) => (
+            <div className="document-row" key={version.id}>
+              <div className="document-row-main">
+                <div className="document-name">{version.name}</div>
+                <div className="document-meta">{version.version_label || "Version not specified"}</div>
+              </div>
+              <div className={statusClass(version.verification_status === "CURRENT" ? "indexed" : "processing")}>
+                {version.verification_status || "UNKNOWN"}
+              </div>
+            </div>
+          ))}
+          <button type="button" className="teach-skip-button" onClick={() => setVersions(null)}>Close versions</button>
+        </div>
+      )}
 
       <input className="documents-search" value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder="Search documents…" />
 
@@ -245,6 +275,9 @@ function DocumentsView({ identity }) {
                 {exporting === `verify-${doc.id}` ? "Checking…" : "Verify now"}
               </button>
             )}
+            <button type="button" className="teach-skip-button" onClick={() => handleVersions(doc.id)}>
+              Versions
+            </button>
 
             <button
               type="button"
