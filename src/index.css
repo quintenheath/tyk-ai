@@ -214,6 +214,32 @@ button {
   font-style: italic;
 }
 
+.deleted-conversation-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.deleted-conversation-filters input,
+.deleted-conversation-filters select {
+  min-width: 150px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: #11161b;
+  color: #e7ebee;
+}
+
+.deleted-read-only-notice {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 184, 77, 0.28);
+  border-radius: 6px;
+  color: #f0c47a;
+  font-size: 13px;
+}
+
 .audit-chat-findings {
   display: grid;
   gap: 8px;

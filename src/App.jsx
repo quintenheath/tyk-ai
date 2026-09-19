@@ -26,17 +26,11 @@ const SettingsView = lazy(() => import("./components/SettingsView"));
 const UsersView = lazy(() => import("./components/UsersView"));
 const ResearchView = lazy(() => import("./components/ResearchView"));
 const HardwareAuditView = lazy(() => import("./components/HardwareAuditView"));
+const DeletedConversationsView = lazy(() => import("./components/DeletedConversationsView"));
 const CallOverlay = lazy(() => import("./components/CallOverlay"));
 const FaceTimeOverlay = lazy(() => import("./components/FaceTimeOverlay"));
 const SearchOverlay = lazy(() => import("./components/SearchOverlay"));
 import NotificationsBell from "./components/NotificationsBell";
-
-const suggestions = [
-  "What hardware is required for this door?",
-  "Explain this hardware schedule",
-  "What does the Ontario Building Code say?",
-  "Help me troubleshoot an installation",
-];
 
 function App() {
   const [identity, setIdentity] = useState(() => loadStoredIdentity());
@@ -58,6 +52,7 @@ function App() {
   const [overlay, setOverlay] = useState(null); // "call" | "facetime" | null
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
   const [selectedAuditFinding, setSelectedAuditFinding] = useState(null);
+  const [deletedReadOnly, setDeletedReadOnly] = useState(false);
 
   const messagesEndRef = useRef(null);
   const navigationButtonRef = useRef(null);
@@ -245,6 +240,15 @@ function App() {
     setAttachedDocs([]);
     setStandaloneView(null);
     setSelectedAuditFinding(null);
+    setDeletedReadOnly(false);
+  }
+
+  function handleOpenDeletedConversation(conversation, deletedMessages) {
+    setStandaloneView(null);
+    setActiveConversationId(conversation.id);
+    setMessages(deletedMessages);
+    setSelectedAuditFinding(null);
+    setDeletedReadOnly(true);
   }
 
   async function handleOpenAuditConversation(conversationId) {
@@ -287,6 +291,7 @@ function App() {
     setStandaloneView(null);
     if (conversationId === activeConversationId) return;
     setActiveConversationId(conversationId);
+    setDeletedReadOnly(false);
     setMessages([]);
     try {
       setMessages(await loadConversationMessages(conversationId, identity));
@@ -523,6 +528,8 @@ function App() {
             setOverlay(null);
             if (nextView === "home") {
               handleNewChat();
+            } else if (nextView === "deleted-conversations" && (identity.isQuinten || identity.name === "Quinten")) {
+              setStandaloneView(nextView);
             } else {
               setStandaloneView(nextView);
             }
@@ -538,6 +545,7 @@ function App() {
           {view === "users" && identity.role === "admin" && <UsersView identity={identity} />}
           {view === "research" && identity.permissions?.can_view_research && <ResearchView identity={identity} />}
           {view === "audit" && identity.permissions?.can_upload_documents && <HardwareAuditView identity={identity} onOpenConversation={handleOpenAuditConversation} />}
+          {view === "deleted-conversations" && (identity.isQuinten || identity.name === "Quinten") && <DeletedConversationsView identity={identity} onOpenConversation={handleOpenDeletedConversation} onRestored={refreshConversations} />}
         </Suspense>
 
         {view === "home" && (
@@ -548,28 +556,10 @@ function App() {
                 TYK is ready
               </div>
 
-              <h1>How can I help?</h1>
-
-              <p>
-                Ask TYK about commercial doors, hardware, drawings,
-                installations, specifications, or your Tykel knowledge.
-              </p>
+              <h1>What's on your mind today?</h1>
             </section>
 
             {errorText && <div className="inline-error">{errorText}</div>}
-
-            <section className="suggestions">
-              {suggestions.map((item) => (
-                <button
-                  key={item}
-                  className="suggestion"
-                  onClick={() => setMessage(item)}
-                >
-                  <span>{item}</span>
-                  <span className="arrow">→</span>
-                </button>
-              ))}
-            </section>
 
             {renderChatForm("")}
 
@@ -688,7 +678,8 @@ function App() {
               <div ref={messagesEndRef} />
             </div>
 
-            {renderChatForm("conversation-input")}
+            {!deletedReadOnly && renderChatForm("conversation-input")}
+            {deletedReadOnly && <div className="deleted-read-only-notice">Deleted conversation · read-only recovery view</div>}
 
             {selectedAuditFinding && (
               <aside className="audit-evidence-panel" aria-label="Audit finding details">

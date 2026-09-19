@@ -65,6 +65,18 @@ export function deleteConversation(conversationId, identity) {
   });
 }
 
+export async function listDeletedConversations(filters, identity) {
+  return invokeConversationStore({ action: "list-deleted", ...filters, token: identity?.token });
+}
+
+export async function loadDeletedConversation(conversationId, identity) {
+  return invokeConversationStore({ action: "get-deleted", conversation_id: conversationId, token: identity?.token });
+}
+
+export async function restoreConversation(conversationId, identity) {
+  return invokeConversationStore({ action: "restore", conversation_id: conversationId, token: identity?.token });
+}
+
 // Explicit human confirmation that a piece of conversation content (often
 // from a temporary Installer/Other session) should become permanent company
 // knowledge, reusing the same learned_answers cache the main chat checks.

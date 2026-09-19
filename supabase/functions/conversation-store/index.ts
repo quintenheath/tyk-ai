@@ -77,6 +77,14 @@ function json(body, status = 200) {
   });
 }
 
+async function loadQuintenIdentity(body) {
+  const identity = await loadIdentity(body);
+  const authorizedId = Deno.env.get("QUINTEN_USER_ID");
+  return identity?.type === "user" && authorizedId && identity.id === authorizedId
+    ? identity
+    : null;
+}
+
 // Every ~20 new messages, compact everything older than the last 8 turns
 // (the window ask-tyk already sends verbatim) into a short running summary,
 // so a long-running conversation keeps real continuity without the raw
@@ -158,6 +166,7 @@ async function ownsConversation(body, conversationId) {
     .select("id")
     .eq("id", conversationId)
     .eq(owner.column, owner.value)
+    .is("deleted_at", null)
     .maybeSingle();
   return Boolean(data);
 }
@@ -179,6 +188,7 @@ Deno.serve(async (req) => {
         .from("conversations")
         .select("id, title, topic_summary, created_at, updated_at")
         .eq(owner.column, owner.value)
+        .is("deleted_at", null)
         .order("updated_at", { ascending: false });
 
       if (error) return json({ error: error.message }, 500);
@@ -197,6 +207,7 @@ Deno.serve(async (req) => {
         .from("conversations")
         .select("id, title, topic_summary, updated_at")
         .eq(owner.column, owner.value)
+        .is("deleted_at", null)
         .ilike("title", `%${query}%`)
         .order("updated_at", { ascending: false })
         .limit(15);
@@ -222,6 +233,45 @@ Deno.serve(async (req) => {
 
       if (error) return json({ error: error.message }, 500);
       return json({ messages: data || [] });
+    }
+
+    if (action === "list-deleted") {
+      if (!await loadQuintenIdentity(body)) return json({ error: "Forbidden" }, 403);
+      let query = supabase
+        .from("conversations")
+        .select("id, title, topic_summary, user_id, session_id, created_at, updated_at, deleted_at, deleted_by, deletion_reason")
+        .not("deleted_at", "is", null)
+        .order("deleted_at", { ascending: false });
+      if (body.target_user_id) query = query.eq("user_id", body.target_user_id);
+      if (body.topic) query = query.or(`title.ilike.%${body.topic}%,topic_summary.ilike.%${body.topic}%`);
+      if (body.from) query = query.gte("deleted_at", body.from);
+      if (body.to) query = query.lte("deleted_at", body.to);
+      const { data, error } = await query;
+      if (error) return json({ error: "Could not load deleted conversations." }, 500);
+      const userIds = [...new Set((data || []).flatMap((conversation) => [conversation.user_id, conversation.deleted_by]).filter(Boolean))];
+      const { data: users } = userIds.length
+        ? await supabase.from("app_users").select("id, name, role").in("id", userIds)
+        : { data: [] };
+      const userById = Object.fromEntries((users || []).map((user) => [user.id, user]));
+      const { data: allUsers } = await supabase.from("app_users").select("id, name, role").order("name", { ascending: true });
+      return json({ conversations: (data || []).map((conversation) => ({ ...conversation, owner: userById[conversation.user_id] || { role: "temporary" }, deleted_by_name: userById[conversation.deleted_by]?.name || (conversation.deleted_by ? "Authorized account" : "Unknown") })), users: allUsers || [] });
+    }
+
+    if (action === "get-deleted") {
+      if (!await loadQuintenIdentity(body)) return json({ error: "Forbidden" }, 403);
+      const { data: conversation, error } = await supabase.from("conversations").select("*").eq("id", body.conversation_id).not("deleted_at", "is", null).maybeSingle();
+      if (error || !conversation) return json({ error: "Deleted conversation not found" }, 404);
+      const { data: messages, error: messageError } = await supabase.from("messages").select("id, role, content, metadata, created_at").eq("conversation_id", body.conversation_id).order("created_at", { ascending: true });
+      if (messageError) return json({ error: "Could not load deleted conversation." }, 500);
+      return json({ conversation, messages: messages || [] });
+    }
+
+    if (action === "restore") {
+      const identity = await loadQuintenIdentity(body);
+      if (!identity) return json({ error: "Forbidden" }, 403);
+      const { data, error } = await supabase.from("conversations").update({ deleted_at: null, restored_at: new Date().toISOString(), restored_by: identity.id }).eq("id", body.conversation_id).not("deleted_at", "is", null).select("id, title, topic_summary, created_at, updated_at").maybeSingle();
+      if (error || !data) return json({ error: "Deleted conversation not found" }, 404);
+      return json({ conversation: data });
     }
 
     if (action === "create") {
@@ -335,13 +385,10 @@ Deno.serve(async (req) => {
         return json({ error: "Forbidden" }, 403);
       }
 
-      await supabase.from("messages").delete().eq(
-        "conversation_id",
-        conversation_id,
-      );
+      const identity = await loadIdentity(body);
       const { error } = await supabase
         .from("conversations")
-        .delete()
+        .update({ deleted_at: new Date().toISOString(), deleted_by: identity?.id || null, deletion_reason: body.reason || "User deleted conversation" })
         .eq("id", conversation_id);
 
       if (error) return json({ error: error.message }, 500);

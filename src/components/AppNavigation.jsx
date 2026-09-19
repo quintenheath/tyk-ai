@@ -15,6 +15,9 @@ function AppNavigation({ identity, isOpen, onSelectView, onStartOverlay, onClose
   if (identity?.role === "admin") {
     navItems.push({ id: "users", label: "Users", icon: "👤" });
   }
+  if (identity?.isQuinten || identity?.name === "Quinten") {
+    navItems.push({ id: "deleted-conversations", label: "Deleted Conversations", icon: "♻" });
+  }
 
   return (
     <>

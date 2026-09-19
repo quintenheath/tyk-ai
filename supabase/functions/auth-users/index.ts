@@ -21,6 +21,11 @@ const corsHeaders = {
 const PERSISTENT_ROLES = ["admin", "office"];
 const TEMP_ROLES = ["installer", "other"];
 
+function isQuintenUser(userId) {
+  const authorizedId = Deno.env.get("QUINTEN_USER_ID");
+  return Boolean(authorizedId && userId === authorizedId);
+}
+
 // Default permission sets used only as a fallback if role_permission_defaults
 // (admin-editable via get/update-role-defaults below) has no row for a role
 // yet - keeps the app working even before that table is ever touched.
@@ -137,6 +142,7 @@ Deno.serve(async (req) => {
           name: user.name,
           role: user.role,
           permissions: user.permissions,
+          isQuinten: isQuintenUser(user.id),
           token,
         },
       });
