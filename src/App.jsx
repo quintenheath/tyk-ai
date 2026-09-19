@@ -399,7 +399,6 @@ function App() {
 
           <div className="topbar-actions">
             <button className="icon-button" onClick={() => setShowSearch(true)}>⌕</button>
-            <button className="icon-button">?</button>
             <NotificationsBell
               identity={identity}
               onOpenView={(nextView) => {

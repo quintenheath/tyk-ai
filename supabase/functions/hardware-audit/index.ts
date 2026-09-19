@@ -118,7 +118,7 @@ Deno.serve(async (req) => {
       if (!body.document_id) return json({ error: "document_id is required" }, 400);
       const { data: audit, error } = await supabase.from("hardware_audits").insert({ document_id: body.document_id, project_name: body.project_name || "Untitled hardware schedule" }).select().single();
       if (error) return json({ error: error.message }, 500);
-      try { await runAudit(audit.id, body.document_id); } catch (error) {
+      try { await runAudit(audit.id, body.document_id); } catch {
         await supabase.from("hardware_audits").update({ status: "error", summary: { error: "Audit extraction failed." } }).eq("id", audit.id);
       }
       return json({ audit: (await supabase.from("hardware_audits").select("*").eq("id", audit.id).single()).data });

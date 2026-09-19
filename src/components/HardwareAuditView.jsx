@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../utils/supabase";
-import { listDocuments, uploadDocument } from "../utils/documents";
+import { uploadDocument } from "../utils/documents";
 
 async function invokeAudit(payload) {
   const { data, error } = await supabase.functions.invoke("hardware-audit", { body: payload });
@@ -10,7 +10,6 @@ async function invokeAudit(payload) {
 }
 
 function HardwareAuditView({ identity }) {
-  const [documents, setDocuments] = useState([]);
   const [audits, setAudits] = useState([]);
   const [selected, setSelected] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -18,16 +17,15 @@ function HardwareAuditView({ identity }) {
 
   useEffect(() => {
     refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refresh() {
     try {
-      const [{ audits: saved }, docs] = await Promise.all([
+      const [{ audits: saved }] = await Promise.all([
         invokeAudit({ action: "list", token: identity?.token }),
-        listDocuments(),
       ]);
       setAudits(saved || []);
-      setDocuments(docs || []);
     } catch (error) {
       console.error("Failed to load hardware audits:", error);
       setErrorText("Could not load hardware schedule audits.");
