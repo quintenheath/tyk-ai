@@ -18,6 +18,7 @@ export async function askTyk({
   history,
   conversationId,
   suppressLearning = false,
+  answerLevel = "standard",
 }) {
   const { data, error } = await supabase.functions.invoke("ask-tyk", {
     body: {
@@ -27,6 +28,7 @@ export async function askTyk({
       history,
       conversationId,
       suppressLearning,
+      answerLevel,
     },
   });
 

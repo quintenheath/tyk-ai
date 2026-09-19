@@ -41,6 +41,7 @@ function App() {
   const [signingOut, setSigningOut] = useState(false);
 
   const [message, setMessage] = useState("");
+  const [answerLevel, setAnswerLevel] = useState("standard");
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState("");
 
@@ -86,6 +87,12 @@ function App() {
   }, [identity]);
 
   useEffect(() => {
+    const key = identity ? `tyk-answer-level:${identity.id}` : null;
+    const saved = key ? localStorage.getItem(key) : null;
+    setAnswerLevel(saved || "standard");
+  }, [identity]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
@@ -107,6 +114,7 @@ function App() {
       attachedDocumentIds,
       history: toHistory(messages),
       conversationId: activeConversationId,
+      answerLevel,
     });
   }
 
@@ -344,6 +352,22 @@ function App() {
             <button type="button" onClick={() => handleStartOverlay("facetime")}>
               🎥 FaceTime
             </button>
+            <label className="answer-level-control">
+              <span>Answer level</span>
+              <select
+                value={answerLevel}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setAnswerLevel(next);
+                  if (identity) localStorage.setItem(`tyk-answer-level:${identity.id}`, next);
+                }}
+              >
+                <option value="simple">Simple</option>
+                <option value="standard">Standard</option>
+                <option value="detailed">Detailed</option>
+                <option value="complicated">Complicated</option>
+              </select>
+            </label>
           </div>
 
           {showAttachPicker && (

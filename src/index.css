@@ -1156,6 +1156,24 @@ button {
   color: #dce3e9;
 }
 
+.answer-level-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #7e8995;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.answer-level-control select {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  background: #15191e;
+  color: #c8d0d8;
+  padding: 5px 6px;
+  font-size: 11px;
+}
+
 .send-button {
   width: 36px;
   height: 36px;
