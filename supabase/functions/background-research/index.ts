@@ -253,8 +253,22 @@ async function insertResearchTasks(tasks) {
       priority: task.priority || 6,
     }));
   if (!missing.length) return 0;
-  const { error } = await supabase.from("research_queue").insert(missing);
-  return error ? 0 : missing.length;
+  let created = 0;
+  for (let index = 0; index < missing.length; index += 20) {
+    const batch = missing.slice(index, index + 20);
+    const { error } = await supabase.from("research_queue").insert(batch);
+    if (!error) {
+      created += batch.length;
+      continue;
+    }
+
+    console.error("Research queue batch insert failed; retrying individually:", error.code || "unknown");
+    for (const task of batch) {
+      const { error: singleError } = await supabase.from("research_queue").insert(task);
+      if (!singleError) created++;
+    }
+  }
+  return created;
 }
 
 async function expandCompletedTask(task, outcome) {
