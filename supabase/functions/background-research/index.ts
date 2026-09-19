@@ -911,12 +911,17 @@ Deno.serve(async (req) => {
       await ensureCodeTasks();
       await ensureResearchAreaTasks();
       await generateGapTasks();
-      await ensureMinimumQueue();
+      const replenished = await ensureMinimumQueue();
       const { count: queuedCount } = await supabase
         .from("research_queue")
         .select("id", { count: "exact", head: true })
         .in("status", ["queued", "researching", "reverify", "needs_review"]);
       if (!queuedCount) await generateMaintenanceTasks();
+
+      const { count: activeCount } = await supabase
+        .from("research_queue")
+        .select("id", { count: "exact", head: true })
+        .in("status", ["queued", "researching", "reverify", "needs_review"]);
 
       const { data, error } = await supabase
         .from("research_queue")
@@ -925,7 +930,14 @@ Deno.serve(async (req) => {
         .order("updated_at", { ascending: false })
         .limit(100);
       if (error) return json({ error: error.message }, 500);
-      return json({ queue: data || [] });
+      return json({
+        queue: data || [],
+        queueStats: {
+          target: MIN_RESEARCH_QUEUE,
+          active: activeCount || 0,
+          replenished: replenished || 0,
+        },
+      });
     }
 
     if (body.action === "log") {
