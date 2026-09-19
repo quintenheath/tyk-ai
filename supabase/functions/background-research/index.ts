@@ -19,7 +19,6 @@ const corsHeaders = {
 // Resource limits - background research must never turn into an unbounded
 // crawl or a runaway AI bill.
 // ---------------------------------------------------------------------------
-const MAX_TASKS_PER_RUN = 1;
 const MIN_RESEARCH_QUEUE = Number(Deno.env.get("MIN_RESEARCH_QUEUE") || 100);
 const INITIAL_LEARNING_DAYS = 30;
 const INITIAL_CADENCE_HOURS = 1;
