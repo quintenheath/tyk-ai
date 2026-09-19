@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import Sidebar from "./components/Sidebar";
+import AppNavigation from "./components/AppNavigation";
 import AttachPicker from "./components/AttachPicker";
 import LoginScreen from "./components/LoginScreen";
 import { askTyk as askTykRequest, toHistory } from "./utils/ask";
@@ -51,28 +52,25 @@ function App() {
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [overlay, setOverlay] = useState(null); // "call" | "facetime" | null
+  const [isNavigationOpen, setIsNavigationOpen] = useState(false);
 
   const messagesEndRef = useRef(null);
+  const navigationButtonRef = useRef(null);
   const view = standaloneView || (activeConversationId ? "conversation" : "home");
 
-  const areaOptions = [
-    { id: "home", label: "Chat" },
-    ...(identity?.permissions?.can_upload_documents !== false
-      ? [{ id: "documents", label: "Documents" }]
-      : []),
-    ...(identity?.permissions?.can_teach_tyk !== false
-      ? [{ id: "teach", label: "Teach TYK" }]
-      : []),
-    ...(identity?.permissions?.can_view_research
-      ? [{ id: "research", label: "Research" }]
-      : []),
-    ...(identity?.permissions?.can_view_settings !== false
-      ? [{ id: "settings", label: "Settings" }]
-      : []),
-    ...(identity?.role === "admin" ? [{ id: "users", label: "Users" }] : []),
-    { id: "call", label: "Call TYK" },
-    { id: "facetime", label: "FaceTime TYK" },
-  ];
+  useEffect(() => {
+    if (!isNavigationOpen) return undefined;
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setIsNavigationOpen(false);
+        navigationButtonRef.current?.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isNavigationOpen]);
 
   useEffect(() => {
     // A cached identity from before signed sessions existed (or one whose
@@ -247,14 +245,9 @@ function App() {
     setOverlay(kind);
   }
 
-  function handleAreaChange(event) {
-    const nextArea = event.target.value;
-    if (nextArea === "call" || nextArea === "facetime") {
-      handleStartOverlay(nextArea);
-      return;
-    }
-    setOverlay(null);
-    setStandaloneView(nextArea === "home" ? "home" : nextArea);
+  function closeNavigation() {
+    setIsNavigationOpen(false);
+    navigationButtonRef.current?.focus();
   }
 
   function handleOverlayConversationCreated(conversation, firstMessage) {
@@ -377,14 +370,10 @@ function App() {
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
-        activeView={standaloneView}
-        identity={identity}
         onNewChat={handleNewChat}
         onSelectConversation={handleSelectConversation}
         onDeleteConversation={handleDeleteConversation}
         onRenameConversation={handleRenameConversation}
-        onSelectView={(v) => setStandaloneView(v)}
-        onStartOverlay={handleStartOverlay}
       />
 
       <div className="tyk-content">
@@ -393,20 +382,16 @@ function App() {
             <div className="brand-mark">T</div>
 
             <div>
-              <label className="area-switcher">
-                <span className="sr-only">TYK area</span>
-                <select
-                  aria-label="TYK area"
-                  value={areaOptions.some((area) => area.id === view) ? view : "home"}
-                  onChange={handleAreaChange}
-                >
-                  {areaOptions.map((area) => (
-                    <option key={area.id} value={area.id}>
-                      {area.id === "home" ? "TYK" : `TYK · ${area.label}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <button
+                ref={navigationButtonRef}
+                type="button"
+                className="brand-nav-toggle"
+                onClick={() => setIsNavigationOpen((open) => !open)}
+                aria-expanded={isNavigationOpen}
+                aria-controls="app-navigation"
+              >
+                TYK <span aria-hidden="true">⌄</span>
+              </button>
               <div className="brand-subtitle">Tykel Intelligence</div>
             </div>
           </div>
@@ -423,6 +408,17 @@ function App() {
             </button>
           </div>
         </header>
+
+        <AppNavigation
+          identity={identity}
+          isOpen={isNavigationOpen}
+          onSelectView={(nextView) => {
+            setOverlay(null);
+            setStandaloneView(nextView);
+          }}
+          onStartOverlay={handleStartOverlay}
+          onClose={closeNavigation}
+        />
 
         <Suspense fallback={<div className="documents-empty">Loading…</div>}>
           {view === "documents" && <DocumentsView identity={identity} />}

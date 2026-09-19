@@ -1,37 +1,17 @@
 import { useState } from "react";
 import { groupConversationsByRecency } from "../utils/conversations";
 
-const NAV_ITEMS = [
-  { id: "documents", label: "📄 Documents", permission: "can_upload_documents" },
-  { id: "teach", label: "🧠 Teach TYK", permission: "can_teach_tyk" },
-];
-
-const CALL_ITEMS = [
-  { id: "call", label: "📞 Call TYK" },
-  { id: "facetime", label: "🎥 FaceTime TYK" },
-];
-
 function Sidebar({
   conversations,
   activeConversationId,
-  activeView,
-  identity,
   onNewChat,
   onSelectConversation,
   onDeleteConversation,
   onRenameConversation,
-  onSelectView,
-  onStartOverlay,
 }) {
   const groups = groupConversationsByRecency(conversations);
   const [editingId, setEditingId] = useState(null);
   const [editingTitle, setEditingTitle] = useState("");
-
-  const navItems = [
-    ...NAV_ITEMS.filter((item) => identity?.permissions?.[item.permission] !== false),
-    ...(identity?.permissions?.can_view_research ? [{ id: "research", label: "🔭 Research" }] : []),
-    ...(identity?.role === "admin" ? [{ id: "users", label: "👤 Users" }] : []),
-  ];
 
   function startEditing(conversation) {
     setEditingId(conversation.id);
@@ -51,31 +31,6 @@ function Sidebar({
       <button className="new-chat-button" onClick={onNewChat}>
         <span>＋</span> New Chat
       </button>
-
-      <nav className="sidebar-nav">
-        {navItems.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={
-              "sidebar-nav-item" + (activeView === item.id ? " active" : "")
-            }
-            onClick={() => onSelectView(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-        {CALL_ITEMS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className="sidebar-nav-item"
-            onClick={() => onStartOverlay(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
 
       <div className="conversation-list">
         {groups.length === 0 && (
