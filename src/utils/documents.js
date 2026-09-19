@@ -54,6 +54,10 @@ export async function exportEverything(identity) {
   return invokeDocumentManager({ action: "export-everything", ...ownerParams(identity) });
 }
 
+export async function verifyDocument(documentId, identity) {
+  return invokeDocumentManager({ action: "verify", document_id: documentId, ...ownerParams(identity) });
+}
+
 // Uploads a file directly to storage via a signed URL, then triggers
 // server-side processing (extract -> chunk -> embed -> auto-classify).
 // TYK determines manufacturer/product/document type itself; the user never

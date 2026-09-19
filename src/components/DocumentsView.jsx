@@ -8,6 +8,7 @@ import {
   exportTykKnowledge,
   listDocuments,
   uploadDocument,
+  verifyDocument,
 } from "../utils/documents";
 
 const STATUS_LABELS = {
@@ -119,6 +120,19 @@ function DocumentsView({ identity }) {
     }
   }
 
+  async function handleVerify(documentId) {
+    setExporting(`verify-${documentId}`);
+    try {
+      await verifyDocument(documentId, identity);
+      await refresh();
+    } catch (err) {
+      console.error("Verification failed:", err);
+      setErrorText("Document verification failed.");
+    } finally {
+      setExporting("");
+    }
+  }
+
   return (
     <main className="documents-main">
       <div className="documents-header">
@@ -187,6 +201,9 @@ function DocumentsView({ identity }) {
                 {doc.chunk_count > 0 && (
                   <span>{doc.chunk_count} chunks indexed</span>
                 )}
+                {doc.verification_status && (
+                  <span className="document-tag">{doc.verification_status}</span>
+                )}
               </div>
               {doc.topics?.length > 0 && (
                 <div className="document-topics">
@@ -215,6 +232,11 @@ function DocumentsView({ identity }) {
             >
               {exporting === doc.id ? "…" : doc.has_file ? "Download" : "No file stored"}
             </button>
+            {doc.source_url && (
+              <button type="button" className="teach-skip-button" disabled={exporting !== ""} onClick={() => handleVerify(doc.id)}>
+                {exporting === `verify-${doc.id}` ? "Checking…" : "Verify now"}
+              </button>
+            )}
 
             <button
               type="button"

@@ -281,7 +281,7 @@ Deno.serve(async (req) => {
       const { data, error } = await supabase
         .from("documents")
         .select(
-          "id, name, description, file_type, file_size, category, manufacturer, product, product_family, document_type, topics, part_numbers, model_numbers, document_date, status, error_message, chunk_count, created_at",
+          "id, name, description, file_type, file_size, category, manufacturer, product, product_family, document_type, topics, part_numbers, model_numbers, document_date, version_label, publication_date, effective_date, verification_status, last_verified_at, next_verification_at, document_family_id, source_url, status, error_message, chunk_count, created_at, file_path",
         )
         .order("created_at", { ascending: false });
 
@@ -291,6 +291,54 @@ Deno.serve(async (req) => {
         has_file: Boolean(document.file_path),
         file_path: undefined,
       })) });
+    }
+
+    if (action === "verify") {
+      if (!(await hasPermission(body, "can_view_research")) && !(await canDownload(body))) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const { document_id } = body;
+      const { data: doc, error } = await supabase.from("documents")
+        .select("id, source_url, document_family_id, verification_status")
+        .eq("id", document_id)
+        .single();
+      if (error || !doc) return json({ error: "Document not found." }, 404);
+      if (!doc.source_url) {
+        await supabase.from("documents").update({ verification_status: "UNKNOWN", verification_error: "No authoritative source URL is recorded." }).eq("id", document_id);
+        return json({ status: "UNKNOWN" });
+      }
+
+      try {
+        const response = await fetch(doc.source_url, { method: "HEAD", redirect: "follow" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const next = new Date(Date.now() + 30 * 86400000).toISOString();
+        await supabase.from("documents").update({ verification_status: "CURRENT", last_verified_at: new Date().toISOString(), next_verification_at: next, verification_error: null }).eq("id", document_id);
+        return json({ status: "CURRENT", nextVerificationAt: next });
+      } catch {
+        const next = new Date(Date.now() + 3 * 86400000).toISOString();
+        await supabase.from("documents").update({ verification_status: "UNABLE_TO_VERIFY", next_verification_at: next, verification_error: "Source was temporarily unavailable." }).eq("id", document_id);
+        await supabase.from("research_queue").insert({
+          topic: `Find replacement/current source for document ${document_id}`,
+          title: "Find replacement/current document source",
+          description: "The authoritative source URL could not be verified automatically.",
+          type: "SOURCE",
+          priority: 7,
+          source_type: "web_search",
+          status: "queued",
+          reason: "Document freshness verification requires a replacement or current source check.",
+        });
+        return json({ status: "UNABLE_TO_VERIFY" });
+      }
+    }
+
+    if (action === "versions") {
+      if (!(await canDownload(body))) return json({ error: "Forbidden" }, 403);
+      const { data: doc } = await supabase.from("documents").select("id, document_family_id").eq("id", body.document_id).maybeSingle();
+      if (!doc) return json({ error: "Document not found." }, 404);
+      const familyId = doc.document_family_id || doc.id;
+      const { data: versions, error } = await supabase.from("documents").select("id, name, version_label, verification_status, last_verified_at, created_at, is_current").or(`id.eq.${familyId},document_family_id.eq.${familyId}`).order("created_at", { ascending: false });
+      if (error) return json({ error: "Could not load document versions." }, 500);
+      return json({ versions: versions || [] });
     }
 
     // Deterministic ILIKE search across the shared company document list -
