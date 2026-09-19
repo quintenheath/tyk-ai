@@ -3,6 +3,7 @@ const NAV_ITEMS = [
   { id: "documents", label: "Documents", icon: "📄", permission: "can_upload_documents" },
   { id: "teach", label: "Teach TYK", icon: "🧠", permission: "can_teach_tyk" },
   { id: "research", label: "Research", icon: "🔭", permission: "can_view_research" },
+  { id: "audit", label: "Hardware Schedule Audit", icon: "🧾", permission: "can_upload_documents" },
   { id: "settings", label: "Settings", icon: "⚙", permission: "can_view_settings" },
 ];
 

@@ -5,6 +5,8 @@ import { exportTykKnowledge } from "../utils/documents";
 const STATUS_LABELS = {
   queued: "Queued",
   researching: "Researching…",
+  paused: "Paused",
+  stopped: "Stopped",
   done: "Done",
   failed: "Failed",
   skipped: "Skipped",
@@ -97,6 +99,16 @@ function ResearchView({ identity }) {
       setErrorText("Couldn't export TYK knowledge right now.");
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function handleTaskAction(task, action) {
+    try {
+      await invokeResearch({ action, task_id: task.id, token: identity?.token });
+      await refresh();
+    } catch (err) {
+      console.error("Failed to update research task:", err);
+      setErrorText("Could not update that research task.");
     }
   }
 
@@ -196,7 +208,13 @@ function ResearchView({ identity }) {
                 <div className="document-meta">{task.reason}</div>
               )}
             </div>
-            <div className={statusClass(task.status)}>{STATUS_LABELS[task.status] || task.status}</div>
+            <div className="document-row-actions">
+              <div className={statusClass(task.status)}>{STATUS_LABELS[task.status] || task.status}</div>
+              {task.status === "researching" && <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(task, "pause")}>Pause</button>}
+              {task.status === "researching" && <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(task, "stop")}>Stop</button>}
+              {task.status === "queued" && <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(task, "prioritize")}>Prioritize</button>}
+              {(task.status === "paused" || task.status === "stopped") && <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(task, "start")}>Restart</button>}
+            </div>
           </div>
         ))}
         {!loading && queue.filter((task) => ACTIVE_STATUSES.has(task.status) && task.status !== "researching").length === 0 && (

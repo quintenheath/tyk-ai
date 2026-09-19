@@ -19,7 +19,7 @@ const corsHeaders = {
 // Resource limits - background research must never turn into an unbounded
 // crawl or a runaway AI bill.
 // ---------------------------------------------------------------------------
-const MAX_TASKS_PER_RUN = 5;
+const MAX_TASKS_PER_RUN = 1;
 const MIN_RESEARCH_QUEUE = Number(Deno.env.get("MIN_RESEARCH_QUEUE") || 100);
 const INITIAL_LEARNING_DAYS = 30;
 const INITIAL_CADENCE_HOURS = 1;
@@ -986,6 +986,25 @@ Deno.serve(async (req) => {
         .limit(100);
       if (error) return json({ error: error.message }, 500);
       return json({ log: data || [] });
+    }
+
+    if (["prioritize", "pause", "stop", "start"].includes(body.action)) {
+      if (!(await hasPermission(body, "can_view_research"))) return json({ error: "Forbidden" }, 403);
+      if (!body.task_id) return json({ error: "task_id is required" }, 400);
+      if (body.action === "start") {
+        const { count } = await supabase.from("research_queue").select("id", { count: "exact", head: true }).eq("status", "researching");
+        if (count) return json({ error: "Another research task is already active." }, 409);
+      }
+      const updates = body.action === "prioritize"
+        ? { priority: 10, updated_at: new Date().toISOString() }
+        : body.action === "pause"
+        ? { status: "paused", updated_at: new Date().toISOString() }
+        : body.action === "stop"
+        ? { status: "stopped", updated_at: new Date().toISOString() }
+        : { status: "queued", updated_at: new Date().toISOString() };
+      const { error } = await supabase.from("research_queue").update(updates).eq("id", body.task_id);
+      if (error) return json({ error: "Could not update research task." }, 500);
+      return json({ ok: true });
     }
 
     // Admin-only internal health snapshot - never exposed to normal users,

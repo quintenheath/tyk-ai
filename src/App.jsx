@@ -23,6 +23,7 @@ const TeachTykView = lazy(() => import("./components/TeachTykView"));
 const SettingsView = lazy(() => import("./components/SettingsView"));
 const UsersView = lazy(() => import("./components/UsersView"));
 const ResearchView = lazy(() => import("./components/ResearchView"));
+const HardwareAuditView = lazy(() => import("./components/HardwareAuditView"));
 const CallOverlay = lazy(() => import("./components/CallOverlay"));
 const FaceTimeOverlay = lazy(() => import("./components/FaceTimeOverlay"));
 const SearchOverlay = lazy(() => import("./components/SearchOverlay"));
@@ -436,6 +437,7 @@ function App() {
           {view === "settings" && <SettingsView identity={identity} />}
           {view === "users" && identity.role === "admin" && <UsersView identity={identity} />}
           {view === "research" && identity.permissions?.can_view_research && <ResearchView identity={identity} />}
+          {view === "audit" && identity.permissions?.can_upload_documents && <HardwareAuditView identity={identity} />}
         </Suspense>
 
         {view === "home" && (
