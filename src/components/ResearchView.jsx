@@ -9,6 +9,8 @@ const STATUS_LABELS = {
   skipped: "Skipped",
 };
 
+const ACTIVE_STATUSES = new Set(["queued", "researching", "reverify", "needs_review"]);
+
 function statusClass(status) {
   if (status === "done") return "doc-status doc-status-ok";
   if (status === "failed") return "doc-status doc-status-error";
@@ -122,12 +124,36 @@ function ResearchView({ identity }) {
             <div className="stats-value">{health.documentStorage === "ok" ? "OK" : "?"}</div>
             <div className="stats-label">Document storage</div>
           </div>
+          <div className="stats-card">
+            <div className="stats-value">{health.researchQueue.researching || 0}</div>
+            <div className="stats-label">Researching now</div>
+          </div>
+          <div className="stats-card">
+            <div className="stats-value">{health.researchQueue.completedToday || 0}</div>
+            <div className="stats-label">Completed today</div>
+          </div>
         </div>
       )}
 
       <div className="teach-history">
-        <div className="teach-history-label">Research queue</div>
-        {queue.map((task) => (
+        <div className="teach-history-label">Currently researching</div>
+        {queue.filter((task) => task.status === "researching").map((task) => (
+          <div className="document-row" key={task.id}>
+            <div className="document-row-main">
+              <div className="document-name">{task.title || task.topic}</div>
+              <div className="document-meta">{task.reason || "Active research cycle"}</div>
+            </div>
+            <div className="doc-status doc-status-pending">Researching…</div>
+          </div>
+        ))}
+        {queue.filter((task) => task.status === "researching").length === 0 && (
+          <div className="documents-empty">Waiting for the next server-side research cycle.</div>
+        )}
+      </div>
+
+      <div className="teach-history">
+        <div className="teach-history-label">Queued to research</div>
+        {queue.filter((task) => ACTIVE_STATUSES.has(task.status) && task.status !== "researching").map((task) => (
           <div className="document-row" key={task.id}>
             <div className="document-row-main">
               <div className="document-name">{task.title || task.topic}</div>
@@ -147,8 +173,8 @@ function ResearchView({ identity }) {
             <div className={statusClass(task.status)}>{STATUS_LABELS[task.status] || task.status}</div>
           </div>
         ))}
-        {!loading && queue.length === 0 && (
-          <div className="documents-empty">No research tasks yet.</div>
+        {!loading && queue.filter((task) => ACTIVE_STATUSES.has(task.status) && task.status !== "researching").length === 0 && (
+          <div className="documents-empty">No queued research work.</div>
         )}
       </div>
 

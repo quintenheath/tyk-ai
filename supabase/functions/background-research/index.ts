@@ -21,6 +21,9 @@ const corsHeaders = {
 // ---------------------------------------------------------------------------
 const MAX_TASKS_PER_RUN = 5;
 const MIN_RESEARCH_QUEUE = Number(Deno.env.get("MIN_RESEARCH_QUEUE") || 100);
+const INITIAL_LEARNING_DAYS = 30;
+const INITIAL_CADENCE_HOURS = 1;
+const STEADY_CADENCE_HOURS = 3;
 const MAX_AI_CALLS_PER_RUN = 5;
 const MAX_WEB_REQUESTS_PER_RUN = 10;
 const MAX_ATTEMPTS = 3;
@@ -899,6 +902,24 @@ async function runResearch() {
   return summary;
 }
 
+async function getResearchCadence() {
+  const { data: firstTask } = await supabase
+    .from("research_queue")
+    .select("created_at")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const activatedAt = firstTask?.created_at ? new Date(firstTask.created_at) : new Date();
+  const initialPeriodEndsAt = new Date(activatedAt.getTime() + INITIAL_LEARNING_DAYS * 86400000);
+  const initialPeriod = Date.now() < initialPeriodEndsAt.getTime();
+  return {
+    activatedAt: activatedAt.toISOString(),
+    initialPeriodEndsAt: initialPeriodEndsAt.toISOString(),
+    hours: initialPeriod ? INITIAL_CADENCE_HOURS : STEADY_CADENCE_HOURS,
+    label: initialPeriod ? "Hourly — Initial learning period" : "Every 3 hours",
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -979,17 +1000,27 @@ Deno.serve(async (req) => {
       const [
         { count: queueTotal },
         { count: queueQueued },
+        { count: queueResearching },
         { data: lastLog },
         { data: providers },
         { data: buckets },
         { count: documentCount },
+        { count: completedToday },
+        { count: sourceCount },
+        { count: entityCount },
+        cadence,
       ] = await Promise.all([
         supabase.from("research_queue").select("id", { count: "exact", head: true }),
         supabase.from("research_queue").select("id", { count: "exact", head: true }).eq("status", "queued"),
+        supabase.from("research_queue").select("id", { count: "exact", head: true }).eq("status", "researching"),
         supabase.from("research_log").select("created_at").order("created_at", { ascending: false }).limit(1),
         supabase.from("provider_health").select("provider, available, cooldown_until, last_success"),
         supabase.storage.listBuckets(),
         supabase.from("documents").select("id", { count: "exact", head: true }),
+        supabase.from("research_log").select("id", { count: "exact", head: true }).gte("created_at", new Date(new Date().setHours(0, 0, 0, 0)).toISOString()),
+        supabase.from("web_sources").select("id", { count: "exact", head: true }),
+        supabase.from("knowledge_entities").select("id", { count: "exact", head: true }),
+        getResearchCadence(),
       ]);
 
       const now = Date.now();
@@ -1001,8 +1032,13 @@ Deno.serve(async (req) => {
           researchQueue: {
             total: queueTotal || 0,
             queued: queueQueued || 0,
+            researching: queueResearching || 0,
+            completedToday: completedToday || 0,
             lastRun: lastLog?.[0]?.created_at || null,
           },
+          sourcesIndexed: sourceCount || 0,
+          entitiesKnown: entityCount || 0,
+          cadence,
           aiProviders: (providers || []).map((p) => ({
             provider: p.provider,
             status: p.cooldown_until && new Date(p.cooldown_until).getTime() > now
@@ -1018,6 +1054,25 @@ Deno.serve(async (req) => {
 
     // Default: this is the scheduled entry point (pg_cron -> pg_net), and
     // also callable manually by an admin for on-demand research.
+    if (!body.token) {
+      const cadence = await getResearchCadence();
+      const { data: latest } = await supabase
+        .from("research_log")
+        .select("created_at")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const elapsed = latest ? Date.now() - new Date(latest.created_at).getTime() : Infinity;
+      if (elapsed < cadence.hours * 60 * 60 * 1000) {
+        return json({
+          ok: true,
+          skipped: true,
+          reason: "Scheduled cadence window has not elapsed.",
+          cadence,
+          nextRunAt: new Date(new Date(latest.created_at).getTime() + cadence.hours * 60 * 60 * 1000).toISOString(),
+        });
+      }
+    }
     const summary = await runResearch();
     return json({ ok: true, summary });
   } catch (err) {

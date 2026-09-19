@@ -15,7 +15,7 @@ async function invokeResearch(payload) {
 // (pending company-knowledge suggestions, research discoveries/changes)
 // instead of a separate notifications table. Subscribes to Realtime so an
 // admin sees new items appear without needing to visit Settings/Research.
-function NotificationsBell({ identity }) {
+function NotificationsBell({ identity, onOpenView }) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState([]);
   const [research, setResearch] = useState([]);
@@ -43,8 +43,11 @@ function NotificationsBell({ identity }) {
         setPending(await listPendingPromotions(identity));
       }
       if (canViewResearch) {
-        const { log } = await invokeResearch({ action: "log", token: identity?.token });
-        setResearch((log || []).filter((entry) => entry.failures || entry.changes_discovered).slice(0, 8));
+        const { queue } = await invokeResearch({ action: "queue", token: identity?.token });
+        setResearch((queue || []).filter((task) =>
+          task.status === "needs_review" ||
+          (task.status === "failed" && (task.retry_count || task.attempts || 0) >= 3)
+        ).slice(0, 8));
       }
     } catch (err) {
       console.error("Failed to load notifications:", err);
@@ -74,9 +77,14 @@ function NotificationsBell({ identity }) {
               <div className="notifications-section-label">Pending company knowledge</div>
               {pending.length === 0 && <div className="documents-empty">Nothing pending.</div>}
               {pending.map((item) => (
-                <div className="notifications-item" key={item.id}>
+                <button
+                  type="button"
+                  className="notifications-item"
+                  key={item.id}
+                  onClick={() => onOpenView?.("settings")}
+                >
                   {item.question}
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -85,9 +93,14 @@ function NotificationsBell({ identity }) {
               <div className="notifications-section-label">Research issues</div>
               {research.length === 0 && <div className="documents-empty">Nothing requiring attention.</div>}
               {research.map((item) => (
-                <div className="notifications-item" key={item.id}>
-                  {item.task_topic} - {item.result}
-                </div>
+                <button
+                  type="button"
+                  className="notifications-item"
+                  key={item.id}
+                  onClick={() => onOpenView?.("research")}
+                >
+                  {item.title || item.topic} - {item.result || item.reason || "Action required"}
+                </button>
               ))}
             </div>
           )}

@@ -399,7 +399,13 @@ function App() {
           <div className="topbar-actions">
             <button className="icon-button" onClick={() => setShowSearch(true)}>⌕</button>
             <button className="icon-button">?</button>
-            <NotificationsBell identity={identity} />
+            <NotificationsBell
+              identity={identity}
+              onOpenView={(nextView) => {
+                setIsNavigationOpen(false);
+                setStandaloneView(nextView);
+              }}
+            />
             <div className="identity-badge">
               {identity.type === "user" ? identity.name : `${identity.role} (temporary)`}
             </div>
