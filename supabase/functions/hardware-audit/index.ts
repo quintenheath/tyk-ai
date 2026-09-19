@@ -1,5 +1,6 @@
 import { supabaseAdmin as supabase } from "../_shared/supabase-admin.ts";
 import { hasPermission } from "../_shared/permissions.ts";
+import { PDFDocument, StandardFonts, rgb } from "npm:pdf-lib@1.17.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,6 +9,32 @@ const corsHeaders = {
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+
+async function createReportPdf(audit, findings) {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  let y = page.getHeight() - 48;
+  const draw = (text, size = 11, color = rgb(0.12, 0.14, 0.16)) => {
+    page.drawText(String(text).slice(0, 110), { x: 42, y, size, font, color });
+    y -= size + 8;
+    if (y < 48) { y = page.getHeight() - 48; pdf.addPage(); }
+  };
+  draw("TYK Hardware Schedule Audit", 18);
+  draw(`Project: ${audit.project_name || "Untitled"}`);
+  draw(`Generated: ${new Date().toISOString()}`);
+  draw(`Openings: ${audit.openings_count} | Hardware sets: ${audit.hardware_sets_count} | Findings: ${audit.issues_count}`);
+  y -= 8;
+  for (const finding of findings) {
+    draw(`${finding.severity} — ${finding.title}`, 12, rgb(0.75, 0.18, 0.12));
+    draw(finding.category);
+    draw(finding.description);
+    if (finding.recommendation) draw(`Recommendation: ${finding.recommendation}`);
+    draw(`Evidence state: ${finding.evidence?.state || "NEEDS_REVIEW"}`);
+    y -= 8;
+  }
+  return pdf.save();
 }
 
 function parseSchedule(text) {
@@ -135,6 +162,19 @@ Deno.serve(async (req) => {
       const { error } = await supabase.from("hardware_audit_findings").update({ status: body.status, resolved_at: body.status === "RESOLVED" ? new Date().toISOString() : null }).eq("id", body.finding_id);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true });
+    }
+
+    if (body.action === "export-report") {
+      const { data: audit, error } = await supabase.from("hardware_audits").select("*").eq("id", body.audit_id).single();
+      if (error || !audit) return json({ error: "Audit not found" }, 404);
+      const { data: findings } = await supabase.from("hardware_audit_findings").select("*").eq("audit_id", body.audit_id).order("severity");
+      const bytes = await createReportPdf(audit, findings || []);
+      const path = `_exports/${crypto.randomUUID()}-hardware-audit.pdf`;
+      const { error: uploadError } = await supabase.storage.from("tyk-documents").upload(path, bytes, { contentType: "application/pdf" });
+      if (uploadError) return json({ error: "Could not create audit report." }, 500);
+      const { data: signed, error: signedError } = await supabase.storage.from("tyk-documents").createSignedUrl(path, 600, { download: `${audit.project_name || "hardware-audit"}.pdf` });
+      if (signedError) return json({ error: "Could not create secure report download." }, 500);
+      return json({ url: signed.signedUrl, expiresIn: 600 });
     }
 
     return json({ error: "Unknown action" }, 400);

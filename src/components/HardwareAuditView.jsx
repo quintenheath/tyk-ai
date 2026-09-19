@@ -76,6 +76,18 @@ function HardwareAuditView({ identity }) {
     }
   }
 
+  async function exportReport() {
+    try {
+      const { url } = await invokeAudit({ action: "export-report", audit_id: selected.audit.id, token: identity?.token });
+      const link = document.createElement("a");
+      link.href = url;
+      link.click();
+    } catch (error) {
+      console.error("Failed to export audit report:", error);
+      setErrorText("Could not create the audit report.");
+    }
+  }
+
   return (
     <main className="documents-main">
       <div className="documents-header">
@@ -93,6 +105,7 @@ function HardwareAuditView({ identity }) {
       {selected && (
         <div className="teach-history">
           <div className="teach-history-label">Audit results · {selected.audit.project_name}</div>
+          <button type="button" className="upload-button" onClick={exportReport}>Download audit report</button>
           <div className="stats-grid">
             <div className="stats-card"><div className="stats-value">{selected.audit.openings_count}</div><div className="stats-label">Openings</div></div>
             <div className="stats-card"><div className="stats-value">{selected.audit.hardware_sets_count}</div><div className="stats-label">Hardware sets</div></div>
