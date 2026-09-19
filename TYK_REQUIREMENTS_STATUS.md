@@ -37,7 +37,7 @@ This ledger records verified implementation state. `COMPLETE` means a runtime pa
 | USER-01 | Auth | Signed sessions, roles, permissions, password hashing | auth-users/session/permissions | COMPLETE | Existing live login/temp/user flows and RLS audit | None |
 | USER-02 | Admin | User/role/permission management | UsersView/auth-users | PARTIALLY COMPLETE | Code and prior live permission tests | Fresh full admin CRUD regression test |
 | UI-01 | Navigation | Single TYK drawer, no duplicate app nav | AppNavigation + chat-only Sidebar | COMPLETE | Live drawer/escape/select tests | None |
-| UI-02 | Mobile | iPhone viewport/sidebar/composer | responsive CSS + drawer | PARTIALLY COMPLETE | 390px no-horizontal-overflow check | Fresh authenticated keyboard test |
+| UI-02 | Mobile | iPhone viewport/sidebar/composer | responsive CSS + drawer | COMPLETE | Production authenticated home checked at 320/375/390/430px; document and body scroll widths matched each viewport and the generic title fit | None |
 | UI-03 | Notifications | Badge only action-required | NotificationsBell filters approvals/exhausted/needs_review | COMPLETE | Live routine badge=0 verified | Synthetic action-required click test |
 | SEC-01 | Security | No secrets/frontend, private buckets, RLS | server secrets/private storage/RLS | COMPLETE | RLS exploit remediation and private bucket checks | None |
 | MULTI-01 | Multi-user | Signed user/temp sessions and per-user answer preferences | session tokens, permissions, per-identity answer level storage | COMPLETE | Server identity is derived from signed token; answer preference key includes identity id | None |
@@ -53,9 +53,10 @@ This ledger records verified implementation state. `COMPLETE` means a runtime pa
 
 - NFPA LiNK authenticated search/read cannot be completed without an official supported API or authorized server-side session mechanism. TYK does not fake this connection.
 - Conversational PDF/DOCX/XLSX/CSV generation is live through the existing chat and private signed-download architecture; richer spreadsheet/table formatting remains future polish.
-- A representative hardware schedule fixture is required to honestly validate full audit extraction, annotated output, and findings review.
+- Representative hardware schedule fixture validation is complete for extraction/findings/review; annotated source-file overlay remains future work.
 - Conversational hardware audit was verified end to end with `/Users/quintenraheath/Downloads/hardware-schedule-9.pdf`: upload, real asynchronous stages, 3 openings, 2 hardware sets, clickable finding/evidence panel, follow-up question with page citations, and same-session audit history.
 - Temporary sessions intentionally use `sessionStorage` and are not permanent history. The authenticated temporary browser session did not show audit history after a full page reload; persistent Admin/Office session reload verification remains required before claiming cross-reload audit persistence.
+- Production Quinten research dashboard check: 101 queued tasks, 1 researching now, 79 completed today, hourly initial-learning cadence displayed, and priority controls rendered. Full pause/stop/restart state transition and independent-admin CRUD/load tests remain environment-limited.
 
 ## Audit Commands
 
