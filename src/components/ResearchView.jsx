@@ -199,8 +199,14 @@ function ResearchView({ identity }) {
                 {task.type && <span className="document-tag">{task.type}</span>}
                 {task.source_type && <span className="document-tag">{task.source_type}</span>}
                 <span className="document-tag">priority {task.priority}</span>
+                {task.manually_prioritized && <span className="document-tag">PRIORITY RESEARCH</span>}
                 {task.entity_name && <span className="document-tag">{task.entity_name}</span>}
               </div>
+              {(task.status === "researching" || task.status === "paused" || task.status === "stopped") && (
+                <div className="document-meta">
+                  {task.progress_percent || 0}% · {task.progress_stage || "Initializing research"}
+                </div>
+              )}
               {task.status === "done" && task.result && (
                 <div className="document-meta">{task.result}</div>
               )}

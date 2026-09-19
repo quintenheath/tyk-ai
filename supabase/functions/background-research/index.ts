@@ -95,6 +95,14 @@ async function logResearch(entry) {
   }
 }
 
+async function updateTaskProgress(taskId, progressPercent, progressStage) {
+  await supabase.from("research_queue").update({
+    progress_percent: progressPercent,
+    progress_stage: progressStage,
+    updated_at: new Date().toISOString(),
+  }).eq("id", taskId);
+}
+
 function stripHtml(html) {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -529,6 +537,7 @@ async function replenishAfterCompletion(task) {
 // ---------------------------------------------------------------------------
 
 async function researchCodeSource(task, budget) {
+  await updateTaskProgress(task.id, 20, "Checking authoritative source");
   const source = SEED_CODE_SOURCES.find((s) => s.topic === task.topic);
   if (!source) return { result: "No matching seed source.", failures: "unknown code task" };
   if (budget.webRequests >= MAX_WEB_REQUESTS_PER_RUN) {
@@ -695,6 +704,8 @@ async function researchWebTask(task, budget) {
   }
 
   budget.aiCalls++;
+  await updateTaskProgress(task.id, 20, "Initializing research");
+  await updateTaskProgress(task.id, 40, "Searching authoritative sources");
   const research = await researchWeb(task.topic, {
     searchQueries: Array.isArray(task.search_queries) && task.search_queries.length
       ? task.search_queries
@@ -704,6 +715,7 @@ async function researchWebTask(task, budget) {
     return { result: null, failures: "No grounded web evidence was returned." };
   }
 
+  await updateTaskProgress(task.id, 75, "Saving source evidence");
   await saveWebResearch(research);
   await createResearchFollowups(research);
   return {
@@ -894,6 +906,9 @@ async function runResearch() {
         ? "PARTIALLY_RESEARCHED"
         : "WELL_RESEARCHED",
       next_research_at: nextDate,
+      progress_percent: nextStatus === "done" ? 100 : task.progress_percent || 0,
+      progress_stage: nextStatus === "done" ? "Completed objective" : outcome.failures ? "Retry scheduled" : task.progress_stage,
+      manually_prioritized: nextStatus === "done" ? false : task.manually_prioritized,
     }).eq("id", task.id);
   }
 
@@ -991,6 +1006,33 @@ Deno.serve(async (req) => {
     if (["prioritize", "pause", "stop", "start"].includes(body.action)) {
       if (!(await hasPermission(body, "can_view_research"))) return json({ error: "Forbidden" }, 403);
       if (!body.task_id) return json({ error: "task_id is required" }, 400);
+      if (body.action === "prioritize") {
+        const { data: active } = await supabase.from("research_queue")
+          .select("id")
+          .eq("status", "researching")
+          .neq("id", body.task_id)
+          .limit(1)
+          .maybeSingle();
+        if (active) {
+          await supabase.from("research_queue").update({
+            status: "paused",
+            progress_stage: "Paused by prioritized research",
+            updated_at: new Date().toISOString(),
+          }).eq("id", active.id);
+        }
+        await supabase.from("research_queue").update({
+          status: "queued",
+          priority: 100,
+          manually_prioritized: true,
+          prioritized_at: new Date().toISOString(),
+          prioritized_by: body.token ? "authenticated_user" : "system",
+          progress_stage: "Waiting to start prioritized research",
+          updated_at: new Date().toISOString(),
+        }).eq("id", body.task_id);
+        const summary = await runResearch();
+        return json({ ok: true, started: body.task_id, summary });
+      }
+
       if (body.action === "start") {
         const { count } = await supabase.from("research_queue").select("id", { count: "exact", head: true }).eq("status", "researching");
         if (count) return json({ error: "Another research task is already active." }, 409);
