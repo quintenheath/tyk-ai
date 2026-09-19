@@ -14,6 +14,8 @@ import {
   promoteToCompanyKnowledge,
   renameConversation,
 } from "./utils/conversations";
+import { supabase } from "./utils/supabase";
+import { downloadDocument } from "./utils/documents";
 
 // Code-split the heavier standalone views/overlays - most sessions never
 // visit most of these in a given run, so there's no reason to ship their
@@ -55,10 +57,31 @@ function App() {
   const [showSearch, setShowSearch] = useState(false);
   const [overlay, setOverlay] = useState(null); // "call" | "facetime" | null
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
+  const [selectedAuditFinding, setSelectedAuditFinding] = useState(null);
 
   const messagesEndRef = useRef(null);
   const navigationButtonRef = useRef(null);
   const view = standaloneView || (activeConversationId ? "conversation" : "home");
+  const auditMessage = messages.find((item) => item.metadata?.auditId);
+  const auditId = auditMessage?.metadata?.auditId || null;
+
+  useEffect(() => {
+    if (view !== "conversation" || !activeConversationId || !auditId) return undefined;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const nextMessages = await loadConversationMessages(activeConversationId, identity);
+        if (!stopped) setMessages(nextMessages);
+      } catch (err) {
+        console.error("Failed to refresh audit conversation:", err);
+      }
+    };
+    const interval = setInterval(poll, 2000);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [activeConversationId, auditId, identity, view]);
 
   useEffect(() => {
     if (!isNavigationOpen) return undefined;
@@ -204,6 +227,43 @@ function App() {
     setMessage("");
     setAttachedDocs([]);
     setStandaloneView(null);
+    setSelectedAuditFinding(null);
+  }
+
+  async function handleOpenAuditConversation(conversationId) {
+    if (!conversationId) return;
+    setStandaloneView(null);
+    setSelectedAuditFinding(null);
+    setActiveConversationId(conversationId);
+    try {
+      setMessages(await loadConversationMessages(conversationId, identity));
+    } catch (err) {
+      console.error("Failed to open audit conversation:", err);
+      setMessages([]);
+    }
+  }
+
+  async function reviewAuditFinding(finding, status) {
+    try {
+      const { error } = await supabase.functions.invoke("hardware-audit", {
+        body: { action: "review", finding_id: finding.id, status, token: identity?.token },
+      });
+      if (error) throw error;
+      setSelectedAuditFinding((current) => current ? { ...current, status } : current);
+    } catch (err) {
+      console.error("Failed to review audit finding:", err);
+    }
+  }
+
+  async function viewAuditEvidence(finding) {
+    const documentId = finding.evidence?.document_id || finding.evidence?.documentId;
+    if (!documentId) return;
+    try {
+      const { url } = await downloadDocument(documentId, identity);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      console.error("Failed to open audit evidence:", err);
+    }
   }
 
   async function handleSelectConversation(conversationId) {
@@ -460,7 +520,7 @@ function App() {
           {view === "settings" && <SettingsView identity={identity} />}
           {view === "users" && identity.role === "admin" && <UsersView identity={identity} />}
           {view === "research" && identity.permissions?.can_view_research && <ResearchView identity={identity} />}
-          {view === "audit" && identity.permissions?.can_upload_documents && <HardwareAuditView identity={identity} />}
+          {view === "audit" && identity.permissions?.can_upload_documents && <HardwareAuditView identity={identity} onOpenConversation={handleOpenAuditConversation} />}
         </Suspense>
 
         {view === "home" && (
@@ -548,6 +608,18 @@ function App() {
                     </div>
                   )}
 
+                  {m.metadata?.auditFindings?.length > 0 && (
+                    <div className="audit-chat-findings">
+                      {m.metadata.auditFindings.map((finding) => (
+                        <button type="button" className="audit-chat-finding" key={finding.id} onClick={() => setSelectedAuditFinding(finding)}>
+                          <span className={`document-tag audit-severity-${String(finding.severity || "INFO").toLowerCase()}`}>{finding.severity}</span>
+                          <strong>{finding.title}</strong>
+                          <span>{finding.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
                   {identity.type === "session" &&
                     identity.permissions?.can_teach_tyk &&
                     m.role === "assistant" &&
@@ -590,6 +662,28 @@ function App() {
             </div>
 
             {renderChatForm("conversation-input")}
+
+            {selectedAuditFinding && (
+              <aside className="audit-evidence-panel" aria-label="Audit finding details">
+                <div className="audit-evidence-header">
+                  <strong>Audit finding</strong>
+                  <button type="button" className="icon-button" onClick={() => setSelectedAuditFinding(null)} aria-label="Close finding details">✕</button>
+                </div>
+                <h3>{selectedAuditFinding.title}</h3>
+                <p><strong>What TYK found:</strong> {selectedAuditFinding.description}</p>
+                {selectedAuditFinding.recommendation && <p><strong>Next action:</strong> {selectedAuditFinding.recommendation}</p>}
+                <p><strong>Status:</strong> {selectedAuditFinding.status || "NEEDS_REVIEW"}</p>
+                <p><strong>Evidence:</strong> Page {selectedAuditFinding.evidence?.page || selectedAuditFinding.evidence?.page_number || "?"}</p>
+                <div className="audit-evidence-actions">
+                  <button type="button" onClick={() => reviewAuditFinding(selectedAuditFinding, "ACKNOWLEDGED")}>Approve</button>
+                  <button type="button" onClick={() => reviewAuditFinding(selectedAuditFinding, "RESOLVED")}>Mark Correct</button>
+                  <button type="button" onClick={() => reviewAuditFinding(selectedAuditFinding, "NEEDS_REVIEW")}>Needs Review</button>
+                  <button type="button" onClick={() => reviewAuditFinding(selectedAuditFinding, "RESEARCH_MORE")}>Research More</button>
+                  <button type="button" onClick={() => reviewAuditFinding(selectedAuditFinding, "DISMISSED")}>Dismiss</button>
+                  <button type="button" onClick={() => viewAuditEvidence(selectedAuditFinding)}>View Schedule</button>
+                </div>
+              </aside>
+            )}
           </main>
         )}
 

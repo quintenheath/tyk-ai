@@ -9,7 +9,7 @@ async function invokeAudit(payload) {
   return data;
 }
 
-function HardwareAuditView({ identity }) {
+function HardwareAuditView({ identity, onOpenConversation }) {
   const [audits, setAudits] = useState([]);
   const [selected, setSelected] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -40,15 +40,15 @@ function HardwareAuditView({ identity }) {
     setErrorText("");
     try {
       const document = await uploadDocument(file, identity);
-      const { audit } = await invokeAudit({
+      const { audit, conversation } = await invokeAudit({
         action: "create",
         document_id: document.id,
+        document_name: document.name,
         project_name: file.name.replace(/\.[^.]+$/, ""),
         token: identity?.token,
       });
-      const detail = await invokeAudit({ action: "get", audit_id: audit.id, token: identity?.token });
-      setSelected(detail);
       refresh();
+      onOpenConversation?.(conversation?.id, audit?.id);
     } catch (error) {
       console.error("Hardware audit failed:", error);
       setErrorText("Hardware schedule audit failed. Please check the uploaded file.");
@@ -59,6 +59,11 @@ function HardwareAuditView({ identity }) {
 
   async function openAudit(auditId) {
     try {
+      const audit = audits.find((item) => item.id === auditId);
+      if (audit?.conversation_id) {
+        onOpenConversation?.(audit.conversation_id, audit.id);
+        return;
+      }
       setSelected(await invokeAudit({ action: "get", audit_id: auditId, token: identity?.token }));
     } catch (error) {
       console.error("Failed to open audit:", error);
@@ -92,12 +97,12 @@ function HardwareAuditView({ identity }) {
     <main className="documents-main">
       <div className="documents-header">
         <h1>Hardware Schedule Audit</h1>
-        <p>Upload a schedule and TYK will extract openings, hardware sets, quantities, ratings, finishes, patterns, and evidence-backed items to review.</p>
+        <p>Start a normal TYK conversation with a schedule attached. TYK will keep the structured audit record behind the conversation for history, reporting, and follow-up questions.</p>
       </div>
       {errorText && <div className="inline-error">{errorText}</div>}
       <div className="documents-upload">
         <label className="upload-button">
-          {uploading ? "Auditing…" : "Upload Hardware Schedule"}
+          {uploading ? "Starting audit…" : "Start Hardware Schedule Audit"}
           <input type="file" accept="application/pdf,.pdf,.csv,text/csv,text/plain,.txt" hidden disabled={uploading} onChange={handleUpload} />
         </label>
       </div>
@@ -132,7 +137,7 @@ function HardwareAuditView({ identity }) {
         {audits.map((audit) => (
           <button type="button" className="document-row audit-history-row" key={audit.id} onClick={() => openAudit(audit.id)}>
             <span className="document-row-main"><span className="document-name">{audit.project_name}</span><span className="document-meta">{audit.openings_count} openings · {audit.issues_count} items to review</span></span>
-            <span className="doc-status doc-status-ok">{audit.status}</span>
+            <span className="doc-status doc-status-ok">{audit.status} · Open conversation</span>
           </button>
         ))}
         {!audits.length && <div className="documents-empty">No hardware schedule audits yet.</div>}

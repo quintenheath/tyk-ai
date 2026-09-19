@@ -1,6 +1,9 @@
 create table if not exists public.hardware_audits (
   id uuid primary key default gen_random_uuid(),
   document_id uuid not null references public.documents(id) on delete cascade,
+  conversation_id uuid references public.conversations(id) on delete set null,
+  user_id uuid references public.app_users(id) on delete cascade,
+  session_id uuid references public.temp_sessions(id) on delete cascade,
   project_name text,
   status text not null default 'analyzing',
   openings_count integer not null default 0,
@@ -29,3 +32,4 @@ alter table public.hardware_audits enable row level security;
 alter table public.hardware_audit_findings enable row level security;
 create index if not exists idx_hardware_audits_created_at on public.hardware_audits (created_at desc);
 create index if not exists idx_hardware_audit_findings_audit_id on public.hardware_audit_findings (audit_id, severity);
+create index if not exists idx_hardware_audits_conversation_id on public.hardware_audits (conversation_id);

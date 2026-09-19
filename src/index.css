@@ -214,6 +214,75 @@ button {
   font-style: italic;
 }
 
+.audit-chat-findings {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  max-width: 680px;
+}
+
+.audit-chat-finding {
+  display: grid;
+  gap: 5px;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid rgba(0, 184, 217, 0.28);
+  border-radius: 8px;
+  background: rgba(18, 27, 32, 0.85);
+  color: #dfe8ed;
+}
+
+.audit-chat-finding:hover {
+  border-color: #00b8d9;
+  background: #17252b;
+}
+
+.audit-chat-finding span:last-child {
+  color: #aeb9c1;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.audit-evidence-panel {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid rgba(0, 184, 217, 0.35);
+  border-radius: 8px;
+  background: #111a1f;
+}
+
+.audit-evidence-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #00b8d9;
+}
+
+.audit-evidence-panel h3 {
+  margin: 12px 0 8px;
+}
+
+.audit-evidence-panel p {
+  margin: 8px 0;
+  color: #c4cdd3;
+  line-height: 1.45;
+}
+
+.audit-evidence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.audit-evidence-actions button {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: #1a242a;
+  color: #e7ebee;
+}
+
 .conversation-input {
   margin-top: 0;
 }
