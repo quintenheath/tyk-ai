@@ -1038,7 +1038,12 @@ Deno.serve(async (req) => {
           },
           sourcesIndexed: sourceCount || 0,
           entitiesKnown: entityCount || 0,
-          cadence,
+          cadence: {
+            ...cadence,
+            nextRunAt: lastLog?.[0]?.created_at
+              ? new Date(new Date(lastLog[0].created_at).getTime() + cadence.hours * 60 * 60 * 1000).toISOString()
+              : new Date().toISOString(),
+          },
           aiProviders: (providers || []).map((p) => ({
             provider: p.provider,
             status: p.cooldown_until && new Date(p.cooldown_until).getTime() > now

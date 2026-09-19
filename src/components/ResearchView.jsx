@@ -132,6 +132,12 @@ function ResearchView({ identity }) {
             <div className="stats-value">{health.researchQueue.completedToday || 0}</div>
             <div className="stats-label">Completed today</div>
           </div>
+          <div className="stats-card">
+            <div className="stats-value">{health.cadence?.label || "Server scheduled"}</div>
+            <div className="stats-label">
+              Next cycle {health.cadence?.nextRunAt ? new Date(health.cadence.nextRunAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "scheduled"}
+            </div>
+          </div>
         </div>
       )}
 
