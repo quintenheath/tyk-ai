@@ -44,7 +44,7 @@ function NotificationsBell({ identity }) {
       }
       if (canViewResearch) {
         const { log } = await invokeResearch({ action: "log", token: identity?.token });
-        setResearch((log || []).filter((e) => e.documents_found > 0 || e.changes_discovered).slice(0, 8));
+        setResearch((log || []).filter((entry) => entry.failures || entry.changes_discovered).slice(0, 8));
       }
     } catch (err) {
       console.error("Failed to load notifications:", err);
@@ -82,8 +82,8 @@ function NotificationsBell({ identity }) {
           )}
           {canViewResearch && (
             <div className="notifications-section">
-              <div className="notifications-section-label">Research discoveries</div>
-              {research.length === 0 && <div className="documents-empty">Nothing new.</div>}
+              <div className="notifications-section-label">Research issues</div>
+              {research.length === 0 && <div className="documents-empty">Nothing requiring attention.</div>}
               {research.map((item) => (
                 <div className="notifications-item" key={item.id}>
                   {item.task_topic} - {item.result}
