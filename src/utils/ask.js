@@ -45,5 +45,6 @@ export async function askTyk({
     conversationMeta: data?.conversationMeta || null,
     needsWebResearch: Boolean(data?.needsWebResearch),
     researchReason: data?.researchReason || null,
+    fileRequest: data?.fileRequest || null,
   };
 }

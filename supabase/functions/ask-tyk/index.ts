@@ -158,6 +158,29 @@ function compactAnswer(answer) {
   return `${compact.slice(0, 680).trim()}…\n\nI can break down the specific component or requirement next.`;
 }
 
+function detectFileRequest(question) {
+  const text = question.toLowerCase();
+  if (!/(make|create|generate|export|send).*(pdf|docx?|word|excel|xlsx|spreadsheet|csv)|(?:pdf|docx?|word|excel|xlsx|spreadsheet|csv).*(make|create|generate|export)/i.test(text)) return null;
+  const format = /\b(?:excel|xlsx|spreadsheet)\b/i.test(text)
+    ? "xlsx"
+    : /\b(?:word|docx?)\b/i.test(text)
+      ? "docx"
+      : /\bcsv\b/i.test(text)
+        ? "csv"
+        : "pdf";
+  return { format, title: `TYK ${format.toUpperCase()} export` };
+}
+
+function buildFileRequestContent(question, history, attachedDocuments) {
+  const sections = [];
+  if (history?.length) sections.push(history.slice(-8).map((turn) => `${turn.role === "assistant" ? "TYK" : "User"}: ${turn.content}`).join("\n"));
+  for (const document of attachedDocuments || []) {
+    sections.push(`Source document: ${document.documentName}\n${document.fullText}`);
+  }
+  sections.push(`User requested: ${question}`);
+  return sections.join("\n\n").slice(0, 120000);
+}
+
 function decideWebResearch(isPlainTextQuestion, knowledgeChunks) {
   if (!isPlainTextQuestion) {
     return {
@@ -551,6 +574,19 @@ Deno.serve(async (req) => {
       searchKnowledge(questionEmbedding),
       loadAttachedDocuments(attachedDocumentIds),
     ]);
+
+    const fileRequest = detectFileRequest(question);
+    if (fileRequest) {
+      return new Response(JSON.stringify({
+        success: true,
+        answer: `I’ll prepare a ${fileRequest.format.toUpperCase()} from this conversation and any attached schedule/document evidence.`,
+        sources: knowledgeChunks.map((chunk) => ({ document: chunk.documentName, page: chunk.page })),
+        fileRequest: { ...fileRequest, content: buildFileRequestContent(question, history, attachedDocuments) },
+        aiRequired: false,
+        needsWebResearch: false,
+        researchReason: "Generated from the active conversation and attached document context.",
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
     // Fire code / connected-source domain check happens before AI - the
     // connected source itself is the authority, not a model's guess.

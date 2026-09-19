@@ -47,6 +47,20 @@ function csvValue(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function documentFamilyName(name) {
+  return (name || "")
+    .replace(/\.[^.]+$/, "")
+    .replace(/(?:[-_ ]?(?:rev(?:ision)?|version|v)\s*[0-9]+(?:\.[0-9]+)*)$/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function toCsv(rows) {
   if (!rows?.length) return "";
   const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
@@ -167,7 +181,7 @@ ${sampleText}`;
 async function processDocument(documentId) {
   const { data: doc, error: docError } = await supabase
     .from("documents")
-    .select("id, name, file_path, file_type")
+    .select("id, name, file_path, file_type, file_size")
     .eq("id", documentId)
     .single();
 
@@ -183,14 +197,43 @@ async function processDocument(documentId) {
     .download(doc.file_path);
 
   if (downloadError) throw downloadError;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const contentHash = await sha256Hex(bytes);
+  const { data: duplicate } = await supabase
+    .from("documents")
+    .select("id, document_family_id")
+    .eq("content_hash", contentHash)
+    .neq("id", documentId)
+    .maybeSingle();
+  if (duplicate) {
+    await supabase.from("documents").update({
+      status: "duplicate",
+      content_hash: null,
+      duplicate_of: duplicate.id,
+      error_message: "This file is an exact duplicate of an existing document.",
+      verification_status: "DUPLICATE",
+    }).eq("id", documentId);
+    return { duplicate: true, duplicateOf: duplicate.id, chunkCount: 0 };
+  }
+
+  const familyName = documentFamilyName(doc.name);
+  const { data: familyCandidate } = await supabase
+    .from("documents")
+    .select("id, document_family_id")
+    .ilike("name", `${familyName}%`)
+    .neq("id", documentId)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const familyId = familyCandidate?.document_family_id || familyCandidate?.id || null;
+  await supabase.from("documents").update({ content_hash: contentHash, document_family_id: familyId }).eq("id", documentId);
 
   const isPdf = (doc.file_type || "").includes("pdf") ||
     doc.file_path.toLowerCase().endsWith(".pdf");
 
   let pageTexts = [];
   if (isPdf) {
-    const buffer = new Uint8Array(await file.arrayBuffer());
-    const pdf = await getDocumentProxy(buffer);
+    const pdf = await getDocumentProxy(bytes);
     const { text } = await extractText(pdf, { mergePages: false });
     pageTexts = Array.isArray(text) ? text : [text];
   } else {
@@ -261,6 +304,7 @@ async function processDocument(documentId) {
         document_date: metadata.document_date || null,
         category: metadata.document_type || null,
         auto_metadata: metadata,
+        version_label: metadata.document_date || null,
       })
       .eq("id", documentId);
   }
@@ -284,7 +328,7 @@ Deno.serve(async (req) => {
       const to = from + pageSize - 1;
       const search = (body.search || "").trim();
       let query = supabase.from("documents").select(
-        "id, name, description, file_type, file_size, category, manufacturer, product, product_family, document_type, topics, part_numbers, model_numbers, document_date, version_label, publication_date, effective_date, verification_status, last_verified_at, next_verification_at, document_family_id, source_url, status, error_message, chunk_count, created_at, file_path",
+        "id, name, description, file_type, file_size, category, manufacturer, product, product_family, document_type, topics, part_numbers, model_numbers, document_date, version_label, publication_date, effective_date, verification_status, last_verified_at, next_verification_at, document_family_id, duplicate_of, source_url, status, error_message, chunk_count, created_at, file_path",
         { count: "exact" },
       ).order("created_at", { ascending: false }).range(from, to);
       if (search) query = query.or(`name.ilike.%${search}%,manufacturer.ilike.%${search}%,product.ilike.%${search}%,document_type.ilike.%${search}%`);

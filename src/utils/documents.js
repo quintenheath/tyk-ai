@@ -95,3 +95,12 @@ export async function uploadDocument(file, identity, { description } = {}) {
   return document;
 }
 
+export async function generateConversationalFile({ format, title, content }, identity) {
+  const { data, error } = await supabase.functions.invoke("document-generator", {
+    body: { format, title, content, token: identity?.token },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+

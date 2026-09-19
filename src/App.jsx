@@ -15,7 +15,7 @@ import {
   renameConversation,
 } from "./utils/conversations";
 import { supabase } from "./utils/supabase";
-import { downloadDocument } from "./utils/documents";
+import { downloadDocument, generateConversationalFile } from "./utils/documents";
 
 // Code-split the heavier standalone views/overlays - most sessions never
 // visit most of these in a given run, so there's no reason to ship their
@@ -141,6 +141,21 @@ function App() {
     });
   }
 
+  async function assistantPayload(result) {
+    const metadata = { sources: result.sources, conversationMeta: result.conversationMeta };
+    if (!result.fileRequest) return { content: result.answer, metadata };
+    try {
+      const generated = await generateConversationalFile(result.fileRequest, identity);
+      return {
+        content: `${result.answer}\n\nI created ${generated.fileName}. Use the download button below.`,
+        metadata: { ...metadata, generatedFile: generated },
+      };
+    } catch (err) {
+      console.error("Conversational file generation failed:", err);
+      return { content: "I understood the file request, but I couldn’t create the download just now. Please try again.", metadata };
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     const question = message.trim();
@@ -168,10 +183,11 @@ function App() {
         setMessages([userMessage]);
         setConversations((prev) => [conversation, ...prev]);
 
-        const { answer, sources, conversationMeta } = await askTyk(question, documentIds);
+        const result = await askTyk(question, documentIds);
+        const assistant = await assistantPayload(result);
         const { message: assistantMessage } = await appendMessage(
           conversation.id,
-          { role: "assistant", content: answer, metadata: { sources, conversationMeta } },
+          { role: "assistant", ...assistant },
           identity,
         );
 
@@ -189,10 +205,11 @@ function App() {
         );
         setMessages((prev) => [...prev, userMessage]);
 
-        const { answer, sources, conversationMeta } = await askTyk(question, documentIds);
+        const result = await askTyk(question, documentIds);
+        const assistant = await assistantPayload(result);
         const { message: assistantMessage } = await appendMessage(
           activeConversationId,
-          { role: "assistant", content: answer, metadata: { sources, conversationMeta } },
+          { role: "assistant", ...assistant },
           identity,
         );
 
@@ -606,6 +623,16 @@ function App() {
                         </div>
                       ))}
                     </div>
+                  )}
+
+                  {m.metadata?.generatedFile?.url && (
+                    <button
+                      type="button"
+                      className="teach-skip-button generated-file-download"
+                      onClick={() => window.open(m.metadata.generatedFile.url, "_blank", "noopener,noreferrer")}
+                    >
+                      Download {m.metadata.generatedFile.fileName || "generated file"}
+                    </button>
                   )}
 
                   {m.metadata?.auditFindings?.length > 0 && (

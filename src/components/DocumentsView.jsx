@@ -17,6 +17,7 @@ const STATUS_LABELS = {
   processing: "Processing…",
   indexed: "Indexed",
   error: "Error",
+  duplicate: "Duplicate",
 };
 
 function statusClass(status) {
@@ -241,6 +242,9 @@ function DocumentsView({ identity }) {
                 )}
                 {doc.verification_status && (
                   <span className="document-tag">{doc.verification_status}</span>
+                )}
+                {doc.duplicate_of && (
+                  <span className="document-tag">Exact duplicate detected</span>
                 )}
               </div>
               {doc.topics?.length > 0 && (
