@@ -19,6 +19,7 @@ function SettingsView({ identity }) {
   const [sources, setSources] = useState([]);
   const [pending, setPending] = useState([]);
   const [activeWork, setActiveWork] = useState([]);
+  const [researchCount, setResearchCount] = useState(0);
   const [checkingProvider, setCheckingProvider] = useState(null);
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
@@ -47,16 +48,14 @@ function SettingsView({ identity }) {
     try {
       const items = await listPendingPromotions(identity);
       setPending(items);
-      // Never show a bare empty box - if nothing is awaiting approval right
-      // now, surface what TYK is actively working on instead, clearly
-      // labeled as a different kind of item (not a fabricated question).
-      if (items.length === 0) {
-        const { data, error } = await supabase.functions.invoke("background-research", {
-          body: { action: "queue", token: identity?.token },
-        });
-        if (!error && !data?.error) {
-          setActiveWork((data.queue || []).filter((t) => t.status !== "done").slice(0, 5));
-        }
+      const { data, error } = await supabase.functions.invoke("background-research", {
+        body: { action: "queue", token: identity?.token },
+      });
+      if (!error && !data?.error) {
+        const researchStatuses = new Set(["queued", "researching", "reverify", "needs_review", "failed"]);
+        const work = (data.queue || []).filter((task) => researchStatuses.has(task.status));
+        setResearchCount(work.length);
+        setActiveWork(work.slice(0, 8));
       }
     } catch (err) {
       console.error("Failed to load pending company knowledge:", err);
@@ -206,38 +205,32 @@ function SettingsView({ identity }) {
 
       {canApprove && (
         <div className="teach-history">
-          <div className="teach-history-label">Pending company knowledge</div>
+          <div className="teach-history-label">
+            Pending company knowledge
+            {researchCount > 0 && ` · ${researchCount} research tasks waiting`}
+          </div>
+
+          {pending.length > 0 && (
+            <div className="documents-header-note">Teach TYK approvals</div>
+          )}
           {pending.map((item) => (
             <div className="teach-history-item" key={item.id}>
               <div className="teach-history-question">{item.question}</div>
               <div className="teach-history-answer">{item.answer}</div>
               <div className="teach-answer-actions">
-                <button
-                  type="button"
-                  className="teach-skip-button"
-                  onClick={() => handleApprove(item.id, false)}
-                >
+                <button type="button" className="teach-skip-button" onClick={() => handleApprove(item.id, false)}>
                   Reject
                 </button>
-                <button
-                  type="button"
-                  className="send-button teach-yes-button"
-                  onClick={() => handleApprove(item.id, true)}
-                >
+                <button type="button" className="send-button teach-yes-button" onClick={() => handleApprove(item.id, true)}>
                   Approve
                 </button>
               </div>
             </div>
           ))}
-          {pending.length === 0 && activeWork.length === 0 && (
-            <div className="documents-empty">Nothing waiting on approval.</div>
-          )}
-          {pending.length === 0 && activeWork.length > 0 && (
+
+          {activeWork.length > 0 && (
             <>
-              <p className="documents-header-note">
-                Nothing waiting on approval right now - here's what TYK is
-                actively researching/maintaining instead:
-              </p>
+              <div className="documents-header-note">TYK research</div>
               {activeWork.map((task) => (
                 <div className="teach-history-item" key={task.id}>
                   <div className="teach-history-question">
@@ -250,6 +243,10 @@ function SettingsView({ identity }) {
                 </div>
               ))}
             </>
+          )}
+
+          {pending.length === 0 && activeWork.length === 0 && (
+            <div className="documents-empty">Research queue is replenishing.</div>
           )}
         </div>
       )}

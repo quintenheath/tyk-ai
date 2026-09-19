@@ -68,6 +68,14 @@ const RESEARCH_AREAS = [
   "Tykel terminology and lessons learned",
 ];
 
+const RESEARCH_VARIANTS = [
+  "Find authoritative documentation for",
+  "Find manufacturer product families for",
+  "Find current installation manuals for",
+  "Find current catalogs and technical bulletins for",
+  "Research compatibility and related products for",
+];
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -139,19 +147,84 @@ async function ensureCodeTasks() {
 }
 
 async function ensureResearchAreaTasks() {
+  const topics = RESEARCH_AREAS.flatMap((area) => [
+    `Research ${area}`,
+    ...RESEARCH_VARIANTS.map((variant) => `${variant} ${area}`),
+  ]);
+  const { data: existing } = await supabase
+    .from("research_queue")
+    .select("topic, status, next_research_date")
+    .in("topic", topics);
+  const existingByTopic = new Map((existing || []).map((task) => [task.topic, task]));
+  const now = new Date().toISOString();
+
   for (const area of RESEARCH_AREAS) {
-    const title = `Research ${area}`;
-    await supabase.from("research_queue").upsert({
-      topic: area,
+    const taskDefinitions = [
+      { title: `Research ${area}`, priority: /fire|exit|compatibility|installation/i.test(area) ? 7 : 4 },
+      ...RESEARCH_VARIANTS.map((variant) => ({
+        title: `${variant} ${area}`,
+        priority: /fire|exit|compatibility|installation/i.test(area) ? 6 : 3,
+      })),
+    ];
+
+    for (const definition of taskDefinitions) {
+      const title = definition.title;
+      const current = existingByTopic.get(title);
+      if (current?.status === "done" && current.next_research_date && current.next_research_date <= now) {
+        await supabase.from("research_queue").update({
+          status: "queued",
+          updated_at: now,
+        }).eq("topic", title).eq("status", "done");
+      }
+      if (current) continue;
+
+      await supabase.from("research_queue").insert({
+        topic: title,
+        title,
+        description: `Find authoritative, reusable evidence about ${area}; prefer official, standards, manufacturer, and authorized technical sources.`,
+        type: "RESEARCH",
+        reason: `Systematic coverage of the ${area} research domain.`,
+        priority: definition.priority,
+        source_type: "web_search",
+        search_queries: [area, `${area} official documentation`, `${area} manufacturer technical information`],
+        status: "queued",
+      });
+    }
+  }
+}
+
+async function createResearchFollowups(discoveredKnowledge) {
+  const entityName = discoveredKnowledge?.entityName;
+  if (!entityName) return;
+
+  const followups = [
+    `Research ${entityName} manufacturer and official product page`,
+    `Find ${entityName} installation manual`,
+    `Find ${entityName} current catalog and technical bulletins`,
+    `Research ${entityName} compatible trims and accessories`,
+    `Research ${entityName} related and replacement models`,
+    `Verify ${entityName} documentation is current`,
+  ];
+  const { data: existing } = await supabase
+    .from("research_queue")
+    .select("topic")
+    .in("topic", followups);
+  const known = new Set((existing || []).map((task) => task.topic));
+
+  for (const title of followups) {
+    if (known.has(title)) continue;
+    await supabase.from("research_queue").insert({
+      topic: title,
       title,
-      description: `Find authoritative, reusable evidence about ${area}; prefer official, standards, manufacturer, and authorized technical sources.`,
+      description: `Follow-up research generated from the source-backed discovery of ${entityName}.`,
       type: "RESEARCH",
-      reason: `Systematic coverage of the ${area} research domain.`,
-      priority: /fire|exit|compatibility|installation/i.test(area) ? 7 : 4,
+      entity_name: entityName,
+      priority: 6,
       source_type: "web_search",
-      search_queries: [area, `${area} official documentation`, `${area} manufacturer technical information`],
+      search_queries: [title, `${entityName} official documentation`, `${entityName} manufacturer`],
+      reason: "A source-backed discovery created additional legitimate documentation and relationship gaps.",
       status: "queued",
-    }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
+    });
   }
 }
 
@@ -450,6 +523,7 @@ async function researchWebTask(task, budget) {
   }
 
   await saveWebResearch(research);
+  await createResearchFollowups(research);
   return {
     result: `Found ${research.sources.length} grounded source(s) for ${task.topic}.`,
     documentsFound: research.sources.length,
@@ -544,7 +618,7 @@ async function runResearch() {
   const { data: tasks } = await supabase
     .from("research_queue")
     .select("*")
-    .in("status", ["queued", "failed"])
+    .in("status", ["queued", "reverify", "failed"])
     .lt("attempts", MAX_ATTEMPTS)
     .or(`next_research_date.is.null,next_research_date.lte.${new Date().toISOString()}`)
     .order("priority", { ascending: false })
