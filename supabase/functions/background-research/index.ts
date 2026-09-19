@@ -716,6 +716,19 @@ Deno.serve(async (req) => {
       ) {
         return json({ error: "Forbidden" }, 403);
       }
+
+      // Queue reads also perform the cheap deterministic replenishment pass.
+      // This keeps the Pending Company Knowledge panel meaningful between
+      // scheduled worker runs without researching or calling AI from the UI.
+      await ensureCodeTasks();
+      await ensureResearchAreaTasks();
+      await generateGapTasks();
+      const { count: queuedCount } = await supabase
+        .from("research_queue")
+        .select("id", { count: "exact", head: true })
+        .in("status", ["queued", "researching", "reverify", "needs_review"]);
+      if (!queuedCount) await generateMaintenanceTasks();
+
       const { data, error } = await supabase
         .from("research_queue")
         .select("*")
