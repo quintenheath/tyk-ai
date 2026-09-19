@@ -362,7 +362,28 @@ async function ensureMinimumQueue() {
       updated_at: new Date().toISOString(),
     }).in("topic", requeueTopics);
   }
-  return insertResearchTasks(tasks.slice(0, deficit));
+
+  const { count: afterRequeue } = await supabase
+    .from("research_queue")
+    .select("id", { count: "exact", head: true })
+    .in("status", ["queued", "researching", "reverify", "needs_review"]);
+  const remaining = MIN_RESEARCH_QUEUE - (afterRequeue || 0);
+  if (remaining <= 0) return 0;
+
+  const refreshTasks = RESEARCH_AREAS.flatMap((area) => [
+    { area, subject: "coverage refresh" },
+    ...RESEARCH_VARIANTS.map((variant) => ({ area, subject: `${variant.toLowerCase()} refresh` })),
+  ]).map(({ area, subject }) => ({
+    topic: `Reverify ${area} ${subject} (${cycle})`,
+    title: `Reverify ${area} ${subject}`,
+    description: `Review current evidence and identify the next real research gap for ${area}.`,
+    type: "RESEARCH",
+    priority: /fire|exit|compatibility|installation/i.test(area) ? 7 : 4,
+    source_type: "web_search",
+    search_queries: [area, `${area} current documentation`, `${area} manufacturer technical bulletin`],
+    reason: "Minimum backlog maintenance: continue researching and re-verifying a real TYK knowledge area.",
+  }));
+  return insertResearchTasks(refreshTasks.slice(0, remaining));
 }
 
 // Any manufacturer/supplier with a COMPANY-CONFIRMED website but a missing
