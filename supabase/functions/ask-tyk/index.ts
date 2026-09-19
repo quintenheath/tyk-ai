@@ -640,7 +640,11 @@ Deno.serve(async (req) => {
           const officialResearch = await researchKnownAuthoritativeSource(researchQuestion);
           if (officialResearch) {
             await saveWebResearch(officialResearch, conversationId);
-            const researchedAnswer = compactAnswer(officialResearch.answer);
+            const researchedAnswer = compactAnswer(
+              /\bnfpa\b/i.test(normalizedQuestion)
+                ? `${officialResearch.answer}\n\nNFPA LiNK is not currently connected to TYK, so this answer is based on the official Ontario sources that were available.`
+                : officialResearch.answer,
+            );
             logAiUsage({
               question: normalizedQuestion,
               intent: "official_code_research",
