@@ -55,6 +55,25 @@ function App() {
   const messagesEndRef = useRef(null);
   const view = standaloneView || (activeConversationId ? "conversation" : "home");
 
+  const areaOptions = [
+    { id: "home", label: "Chat" },
+    ...(identity?.permissions?.can_upload_documents !== false
+      ? [{ id: "documents", label: "Documents" }]
+      : []),
+    ...(identity?.permissions?.can_teach_tyk !== false
+      ? [{ id: "teach", label: "Teach TYK" }]
+      : []),
+    ...(identity?.permissions?.can_view_research
+      ? [{ id: "research", label: "Research" }]
+      : []),
+    ...(identity?.permissions?.can_view_settings !== false
+      ? [{ id: "settings", label: "Settings" }]
+      : []),
+    ...(identity?.role === "admin" ? [{ id: "users", label: "Users" }] : []),
+    { id: "call", label: "Call TYK" },
+    { id: "facetime", label: "FaceTime TYK" },
+  ];
+
   useEffect(() => {
     // A cached identity from before signed sessions existed (or one whose
     // token has expired) has no valid token - treat it as signed out rather
@@ -228,6 +247,16 @@ function App() {
     setOverlay(kind);
   }
 
+  function handleAreaChange(event) {
+    const nextArea = event.target.value;
+    if (nextArea === "call" || nextArea === "facetime") {
+      handleStartOverlay(nextArea);
+      return;
+    }
+    setOverlay(null);
+    setStandaloneView(nextArea === "home" ? "home" : nextArea);
+  }
+
   function handleOverlayConversationCreated(conversation, firstMessage) {
     setActiveConversationId(conversation.id);
     setMessages([firstMessage]);
@@ -364,7 +393,20 @@ function App() {
             <div className="brand-mark">T</div>
 
             <div>
-              <div className="brand-name">TYK</div>
+              <label className="area-switcher">
+                <span className="sr-only">TYK area</span>
+                <select
+                  aria-label="TYK area"
+                  value={areaOptions.some((area) => area.id === view) ? view : "home"}
+                  onChange={handleAreaChange}
+                >
+                  {areaOptions.map((area) => (
+                    <option key={area.id} value={area.id}>
+                      {area.id === "home" ? "TYK" : `TYK · ${area.label}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="brand-subtitle">Tykel Intelligence</div>
             </div>
           </div>
