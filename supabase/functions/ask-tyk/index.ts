@@ -143,6 +143,21 @@ function buildPartialAnswer(knowledgeChunks) {
   return `Here's what I have on file:\n\n${excerpts}`;
 }
 
+function compactAnswer(answer) {
+  if (!answer) return answer;
+  const clean = answer
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\n?Sources?:[\s\S]*$/i, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (clean.length <= 720) return clean;
+
+  const paragraphs = clean.split(/\n\s*\n/).filter(Boolean);
+  const compact = paragraphs.slice(0, 2).join("\n\n").trim();
+  if (compact.length <= 720) return `${compact}\n\nI can break down the specific component or requirement next.`;
+  return `${compact.slice(0, 680).trim()}…\n\nI can break down the specific component or requirement next.`;
+}
+
 function decideWebResearch(isPlainTextQuestion, knowledgeChunks) {
   if (!isPlainTextQuestion) {
     return {
@@ -523,7 +538,7 @@ Deno.serve(async (req) => {
         return new Response(
           JSON.stringify({
             success: true,
-            answer: savedSource.answer,
+            answer: compactAnswer(savedSource.answer),
             sources: [{
               document: savedSource.title || savedSource.domain,
               url: savedSource.url,
@@ -553,7 +568,7 @@ Deno.serve(async (req) => {
           const officialResearch = await researchKnownAuthoritativeSource(researchQuestion);
           if (officialResearch) {
             await saveWebResearch(officialResearch, conversationId);
-            const researchedAnswer = officialResearch.answer;
+            const researchedAnswer = compactAnswer(officialResearch.answer);
             logAiUsage({
               question: normalizedQuestion,
               intent: "official_code_research",
@@ -593,9 +608,9 @@ Deno.serve(async (req) => {
         const research = await researchWeb(researchQuestion);
         if (research) {
           await saveWebResearch(research, conversationId);
-          const researchedAnswer = research.ambiguity
+          const researchedAnswer = compactAnswer(research.ambiguity
             ? `${research.answer}\n\nEvidence note: ${research.ambiguity}`
-            : research.answer;
+            : research.answer);
           if (questionEmbedding && !suppressLearning) {
             await saveLearnedAnswer({
               question,
