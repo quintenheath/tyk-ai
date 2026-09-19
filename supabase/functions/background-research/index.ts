@@ -235,11 +235,15 @@ async function createResearchFollowups(discoveredKnowledge) {
 async function insertResearchTasks(tasks) {
   if (!tasks.length) return 0;
   const topics = tasks.map((task) => task.topic);
-  const { data: existing } = await supabase
-    .from("research_queue")
-    .select("topic")
-    .in("topic", topics);
-  const known = new Set((existing || []).map((task) => task.topic));
+  const existing = [];
+  for (let index = 0; index < topics.length; index += 20) {
+    const { data } = await supabase
+      .from("research_queue")
+      .select("topic")
+      .in("topic", topics.slice(index, index + 20));
+    existing.push(...(data || []));
+  }
+  const known = new Set(existing.map((task) => task.topic));
   const missing = tasks
     .filter((task) => !known.has(task.topic))
     .map((task) => ({
@@ -349,18 +353,22 @@ async function ensureMinimumQueue() {
   });
 
   const topics = tasks.map((task) => task.topic);
-  const { data: existing } = await supabase
-    .from("research_queue")
-    .select("topic, status")
-    .in("topic", topics);
-  const requeueTopics = (existing || [])
+  const existing = [];
+  for (let index = 0; index < topics.length; index += 20) {
+    const { data } = await supabase
+      .from("research_queue")
+      .select("topic, status")
+      .in("topic", topics.slice(index, index + 20));
+    existing.push(...(data || []));
+  }
+  const requeueTopics = existing
     .filter((task) => task.status === "done" || task.status === "failed")
     .map((task) => task.topic);
-  if (requeueTopics.length) {
+  for (let index = 0; index < requeueTopics.length; index += 20) {
     await supabase.from("research_queue").update({
       status: "queued",
       updated_at: new Date().toISOString(),
-    }).in("topic", requeueTopics);
+    }).in("topic", requeueTopics.slice(index, index + 20));
   }
 
   const { count: afterRequeue } = await supabase
