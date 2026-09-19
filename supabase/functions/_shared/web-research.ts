@@ -128,7 +128,7 @@ function stripHtml(html) {
     .trim();
 }
 
-function isBoilerplate(text) {
+export function isBoilerplate(text) {
   return !text || /e-laws needs javascript|enable javascript|cookie settings|privacy policy|accept cookies|sign in to continue|page not found/i.test(text);
 }
 

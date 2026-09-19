@@ -10,6 +10,7 @@ import { getActiveConnector } from "../_shared/connected-sources/registry.ts";
 import { SourceNotConnectedError } from "../_shared/connected-sources/types.ts";
 import {
   findSavedWebSource,
+  isBoilerplate,
   isFireCodeQuestion,
   researchKnownAuthoritativeSource,
   researchWeb,
@@ -510,7 +511,7 @@ Deno.serve(async (req) => {
 
     if (isPlainTextQuestion && researchDecision.needsWebResearch) {
       const savedSource = await findSavedWebSource(researchQuestion);
-      if (savedSource) {
+      if (savedSource && !isBoilerplate(savedSource.answer)) {
         logAiUsage({
           question: normalizedQuestion,
           intent: "saved_web_source",
