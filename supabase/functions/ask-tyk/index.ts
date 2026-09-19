@@ -216,6 +216,11 @@ function resolveConversationFollowup(question, history) {
   return null;
 }
 
+function isNonSubstantiveInput(question) {
+  const clean = question.trim().toLowerCase().replace(/[\s.!?]+/g, "");
+  return clean.length === 0 || /^(heh|hmm|hm|ok|okay|yeah|yep|no|nope|lol|what|huh|k|thanks|thx|\?)+$/.test(clean);
+}
+
 function webSourceCitations(sources) {
   return (sources || []).map((source) => ({
     document: source.title,
@@ -402,6 +407,24 @@ Deno.serve(async (req) => {
     const startedAt = Date.now();
     const normalizedQuestion = normalizeQuestion(question);
     const researchQuestion = contextualResearchQuestion(question, history);
+
+    if (isNonSubstantiveInput(question)) {
+      const hasContext = history?.some((turn) => turn.role === "user" || turn.role === "assistant");
+      const answer = hasContext
+        ? "Are you still referring to what we were just discussing, or would you like to ask something else?"
+        : "What would you like me to help you with?";
+      return new Response(JSON.stringify({
+        success: true,
+        answer,
+        sources: [],
+        aiRequired: false,
+        needsWebResearch: false,
+        researchReason: "Input was ambiguous or non-substantive; no research task was created.",
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const conversationFollowup = resolveConversationFollowup(question, history);
     if (conversationFollowup) {

@@ -18,6 +18,12 @@ body,
   min-height: 100%;
 }
 
+html,
+body,
+#root {
+  min-height: 100dvh;
+}
+
 body {
   min-width: 320px;
   min-height: 100vh;
@@ -35,7 +41,7 @@ button {
 }
 
 .tyk-app {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: row;
 }
@@ -45,7 +51,7 @@ button {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .sidebar {
@@ -1228,11 +1234,13 @@ button {
 
   .main {
     width: min(100% - 24px, 900px);
-    padding-top: 60px;
+    padding: 34px 0 calc(24px + env(safe-area-inset-bottom));
   }
 
   .conversation-main {
     width: min(100% - 24px, 900px);
+    height: calc(100dvh - 64px);
+    padding: 12px 0 calc(12px + env(safe-area-inset-bottom));
   }
 
   .suggestions {
@@ -1240,7 +1248,7 @@ button {
   }
 
   .welcome h1 {
-    font-size: 44px;
+    font-size: 38px;
   }
 
   .welcome p {
@@ -1249,6 +1257,32 @@ button {
 
   .quick-links {
     flex-wrap: wrap;
+  }
+
+  .chat-box {
+    margin-top: 14px;
+    padding: 12px;
+    border-radius: 13px;
+  }
+
+  .chat-tools {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .chat-tools::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chat-tools button {
+    flex: 0 0 auto;
+    padding: 7px 6px;
+    font-size: 12px;
+  }
+
+  .chat-box textarea {
+    max-height: 120px;
   }
 }
 
