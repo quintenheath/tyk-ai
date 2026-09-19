@@ -1604,6 +1604,12 @@ button {
   margin-top: 20px;
 }
 
+.source-setup-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 /* Search overlay */
 .overlay-backdrop {
   position: fixed;

@@ -315,6 +315,16 @@ function SettingsView({ identity }) {
               <button type="button" className="teach-skip-button" onClick={() => setSetupSource(null)}>
                 Close
               </button>
+              {setupSource.source_url && (
+                <a
+                  className="teach-skip-button source-setup-link"
+                  href={setupSource.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open official NFPA LiNK
+                </a>
+              )}
               <button type="button" className="upload-button" onClick={() => checkConnection(setupSource.provider)}>
                 Check server configuration
               </button>
