@@ -240,21 +240,17 @@ async function insertResearchTasks(tasks) {
     .select("topic")
     .in("topic", topics);
   const known = new Set((existing || []).map((task) => task.topic));
-  let created = 0;
-  for (const task of tasks) {
-    if (known.has(task.topic)) continue;
-    const { error } = await supabase.from("research_queue").insert({
+  const missing = tasks
+    .filter((task) => !known.has(task.topic))
+    .map((task) => ({
       ...task,
       status: task.status || "queued",
       source_type: task.source_type || "web_search",
       priority: task.priority || 6,
-    });
-    if (!error) {
-      known.add(task.topic);
-      created++;
-    }
-  }
-  return created;
+    }));
+  if (!missing.length) return 0;
+  const { error } = await supabase.from("research_queue").insert(missing);
+  return error ? 0 : missing.length;
 }
 
 async function expandCompletedTask(task, outcome) {
