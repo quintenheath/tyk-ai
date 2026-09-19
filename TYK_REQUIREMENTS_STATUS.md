@@ -37,6 +37,14 @@ This ledger records verified implementation state. `COMPLETE` means a runtime pa
 | UI-02 | Mobile | iPhone viewport/sidebar/composer | responsive CSS + drawer | PARTIALLY COMPLETE | 390px no-horizontal-overflow check | Fresh authenticated keyboard test |
 | UI-03 | Notifications | Badge only action-required | NotificationsBell filters approvals/exhausted/needs_review | COMPLETE | Live routine badge=0 verified | Synthetic action-required click test |
 | SEC-01 | Security | No secrets/frontend, private buckets, RLS | server secrets/private storage/RLS | COMPLETE | RLS exploit remediation and private bucket checks | None |
+| MULTI-01 | Multi-user | Signed user/temp sessions and per-user answer preferences | session tokens, permissions, per-identity answer level storage | COMPLETE | Server identity is derived from signed token; answer preference key includes identity id | None |
+| MULTI-02 | Multi-user | Conversations/messages isolated by owner | conversation-store ownerColumn/ownsConversation | COMPLETE | List/get/append/rename/delete all verify owner server-side | None |
+| MULTI-03 | Multi-user | Shared company knowledge remains distinct from private conversations | learned_answers/knowledge tables separated from conversations | COMPLETE | Promotion is explicit; normal conversation writes do not promote company knowledge | None |
+| MULTI-04 | Multi-user | Document/audit operations do not use global current-user state | signed-token permission checks; document/audit IDs | COMPLETE | Requests carry explicit token and object IDs; no global mutable server user state found | None |
+| MULTI-05 | Concurrency | Background research is global but one task is atomically claimed | `claim_next_research_task()` with `FOR UPDATE SKIP LOCKED` | COMPLETE | Migration 20260919140000 applied and worker deployed; concurrent worker claim is database-atomic | Load test with multiple simultaneous workers remains environment-limited |
+| MULTI-06 | Concurrency | User chat/uploads/audits can operate independently of background worker | request-scoped Edge Functions and private storage paths | PARTIALLY COMPLETE | Architecture is request-scoped; no global application lock found | Full six-user concurrent browser/load test not run in this environment |
+| MULTI-07 | Security | Cross-user conversation access denied server-side | signed token owner checks | COMPLETE | Existing ownership checks cover every conversation action | None |
+| MULTI-08 | Security | Temporary sessions are isolated and cleaned up | temp_sessions owner column and auth end-session cascade | COMPLETE | Existing auth/session architecture and prior live tests | None |
 
 ## Known External/Operational Blockers
 
