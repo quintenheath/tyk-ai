@@ -9,6 +9,7 @@ import { embedText } from "../_shared/embeddings.ts";
 import { saveLearnedAnswer } from "../_shared/learned-knowledge.ts";
 import { supabaseAdmin as supabase } from "../_shared/supabase-admin.ts";
 import { hasPermission, loadIdentity } from "../_shared/permissions.ts";
+import { researchWeb, saveWebResearch } from "../_shared/web-research.ts";
 
 const IMAGE_BUCKET = "tyk-teach-images";
 const SIGNED_URL_TTL = 300;
@@ -318,7 +319,7 @@ Respond with ONLY the index number, nothing else.`;
 // Picks the most useful open gap - prioritizing high-value, well-connected
 // facts over arbitrary rotation, and revisiting uncertain facts with an
 // explanation rather than silently re-asking.
-async function pickCoverageGap() {
+async function pickCoverageGap(excludedFactIds = []) {
   const { data } = await supabase
     .from("knowledge_facts")
     .select(
@@ -338,7 +339,9 @@ async function pickCoverageGap() {
     entityId: d.entity_id,
     entityName: d.knowledge_entities.name,
     entityType: d.knowledge_entities.entity_type,
-  }));
+  })).filter((candidate) => !excludedFactIds.includes(candidate.factId));
+
+  if (!candidates.length) return null;
 
   const scored = await scoreCandidates(candidates);
   let chosen = scored[0];
@@ -519,6 +522,36 @@ async function createQuestionEntry(question, metadata) {
   return created;
 }
 
+async function saveExternalTeachDiscovery(gap, research) {
+  await saveWebResearch(research);
+  const sourceLines = research.sources
+    .map((source) => `- ${source.title} (${source.url})`)
+    .join("\n");
+  const answer = research.ambiguity
+    ? `${research.answer}\n\nEvidence note: ${research.ambiguity}\n\nSources:\n${sourceLines}`
+    : `${research.answer}\n\nSources:\n${sourceLines}`;
+
+  const { data, error } = await supabase
+    .from("learning_entries")
+    .insert({
+      question: gap.question,
+      answer,
+      status: "answered",
+      answered_at: new Date().toISOString(),
+      metadata: {
+        ...gap.metadata,
+        kind: "external_research",
+        knowledgeState: "SOURCE_BACKED",
+        sources: research.sources,
+        confidence: research.confidence,
+      },
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 async function nextQuestionEntryRaw() {
   const { data: pending } = await supabase
     .from("learning_entries")
@@ -533,8 +566,28 @@ async function nextQuestionEntryRaw() {
   const sourceGap = await findConnectedSourceGap();
   if (sourceGap) return createQuestionEntry(sourceGap.question, sourceGap.metadata);
 
-  const gap = await pickCoverageGap();
-  if (gap) return createQuestionEntry(gap.question, gap.metadata);
+  const excludedFactIds = [];
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const gap = await pickCoverageGap(excludedFactIds);
+    if (!gap) break;
+    excludedFactIds.push(gap.metadata.factId);
+
+    // External facts are researched before TYK asks an employee. Company-
+    // specific procedures and visual confirmations still require a human.
+    if (gap.metadata.kind === "fact" && !IMAGE_FACT_KEYS.has(gap.metadata.factKey)) {
+      try {
+        const research = await researchWeb(gap.question);
+        if (research) {
+          await saveExternalTeachDiscovery(gap, research);
+          continue;
+        }
+      } catch (err) {
+        console.error("Teach TYK web research failed (asking human instead):", err);
+      }
+    }
+
+    return createQuestionEntry(gap.question, gap.metadata);
+  }
 
   const question = await generateOpenQuestion();
   return createQuestionEntry(question, { kind: "open" });
