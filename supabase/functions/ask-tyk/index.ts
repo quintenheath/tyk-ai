@@ -192,6 +192,30 @@ function contextualResearchQuestion(question, history) {
   return `Answer this follow-up in the existing conversation.\n${context}\nLatest user detail/question: ${question}`;
 }
 
+function resolveConversationFollowup(question, history) {
+  if (!history?.length || history.length < 2) return null;
+  const text = question.trim().toLowerCase();
+  const prior = history.map((turn) => turn.content).join(" ").toLowerCase();
+  if (!/fire[- ]rated|fire door|rated opening|positive latching|self[- ]closing/.test(prior)) return null;
+
+  if (/closer/.test(text)) {
+    return "Yes — the closer is the self-closing device. For a fire-rated opening, it needs to be appropriate for the door, frame, rating, and listed/labeled assembly. If you tell me the rating and door type, I can narrow down the application.";
+  }
+  if (/latch|lockset|exit hardware|panic hardware/.test(text)) {
+    return "The latch or fire-exit hardware provides positive latching so the door stays secured in the frame. The exact hardware depends on whether the opening is a single door, pair, exit, or panic application.";
+  }
+  if (/hinge|pivot/.test(text)) {
+    return "The hinges, pivots, or continuous hinge support the door and must be suitable for its size, weight, rating, and listed assembly. Quantity and type depend on the door configuration.";
+  }
+  if (/^(45|60|90|180)\s*(minute|min)|hollow metal|steel door|aluminum door/.test(text)) {
+    return `I’ll treat that as additional information about the same fire-rated opening: ${question.trim()}. The rating and door construction narrow the applicable closer, latching, hinge, and listed-assembly requirements.`;
+  }
+  if (/^why\b|what does that mean/.test(text)) {
+    return "The key issue is that a fire-rated opening has to close and latch as a tested assembly. Hardware that changes the closing, latching, or listing of the assembly needs to be checked against the applicable code and manufacturer documentation.";
+  }
+  return null;
+}
+
 function webSourceCitations(sources) {
   return (sources || []).map((source) => ({
     document: source.title,
@@ -378,6 +402,21 @@ Deno.serve(async (req) => {
     const startedAt = Date.now();
     const normalizedQuestion = normalizeQuestion(question);
     const researchQuestion = contextualResearchQuestion(question, history);
+
+    const conversationFollowup = resolveConversationFollowup(question, history);
+    if (conversationFollowup) {
+      return new Response(JSON.stringify({
+        success: true,
+        answer: conversationFollowup,
+        sources: [],
+        aiRequired: false,
+        needsWebResearch: false,
+        researchReason: "Answered from the active conversation context.",
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const isPlainTextQuestion = images.length === 0 &&
       attachedDocumentIds.length === 0;
