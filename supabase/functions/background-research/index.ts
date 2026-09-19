@@ -360,7 +360,7 @@ async function ensureMinimumQueue() {
       description: `Review known evidence and identify the next missing source, document, relationship, or current revision for ${area}.`,
       type: "RESEARCH",
       priority: /fire|exit|compatibility|installation/i.test(area) ? 7 : 4,
-      source_type: "web_search",
+      source_type: "other",
       search_queries: [area, `${area} current documentation`, `${area} manufacturer technical bulletin`],
       reason: "Minimum backlog maintenance: reverify an active knowledge area and generate its next gaps.",
     };
@@ -401,8 +401,7 @@ async function ensureMinimumQueue() {
     description: `Review current evidence and identify the next real research gap for ${area}.`,
     type: "RESEARCH",
     priority: /fire|exit|compatibility|installation/i.test(area) ? 7 : 4,
-    source_type: "web_search",
-    search_queries: [area, `${area} current documentation`, `${area} manufacturer technical bulletin`],
+    source_type: "other",
     reason: "Minimum backlog maintenance: continue researching and re-verifying a real TYK knowledge area.",
   }));
   return insertResearchTasks(refreshTasks.slice(0, remaining));
