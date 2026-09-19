@@ -347,6 +347,21 @@ async function ensureMinimumQueue() {
       reason: "Minimum backlog maintenance: reverify an active knowledge area and generate its next gaps.",
     };
   });
+
+  const topics = tasks.map((task) => task.topic);
+  const { data: existing } = await supabase
+    .from("research_queue")
+    .select("topic, status")
+    .in("topic", topics);
+  const requeueTopics = (existing || [])
+    .filter((task) => task.status === "done" || task.status === "failed")
+    .map((task) => task.topic);
+  if (requeueTopics.length) {
+    await supabase.from("research_queue").update({
+      status: "queued",
+      updated_at: new Date().toISOString(),
+    }).in("topic", requeueTopics);
+  }
   return insertResearchTasks(tasks.slice(0, deficit));
 }
 
