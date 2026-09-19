@@ -871,6 +871,7 @@ Deno.serve(async (req) => {
       await ensureCodeTasks();
       await ensureResearchAreaTasks();
       await generateGapTasks();
+      await ensureMinimumQueue();
       const { count: queuedCount } = await supabase
         .from("research_queue")
         .select("id", { count: "exact", head: true })
