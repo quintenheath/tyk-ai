@@ -34,6 +34,26 @@ export async function deleteDocument(documentId, identity) {
   });
 }
 
+export async function downloadDocument(documentId, identity) {
+  return invokeDocumentManager({
+    action: "download",
+    document_id: documentId,
+    ...ownerParams(identity),
+  });
+}
+
+export async function downloadAllDocuments(identity) {
+  return invokeDocumentManager({ action: "download-all", ...ownerParams(identity) });
+}
+
+export async function exportTykKnowledge(identity) {
+  return invokeDocumentManager({ action: "export-knowledge", ...ownerParams(identity) });
+}
+
+export async function exportEverything(identity) {
+  return invokeDocumentManager({ action: "export-everything", ...ownerParams(identity) });
+}
+
 // Uploads a file directly to storage via a signed URL, then triggers
 // server-side processing (extract -> chunk -> embed -> auto-classify).
 // TYK determines manufacturer/product/document type itself; the user never

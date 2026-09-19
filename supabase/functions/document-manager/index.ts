@@ -5,11 +5,14 @@ import { supabaseAdmin as supabase } from "../_shared/supabase-admin.ts";
 import { embedTexts } from "../_shared/embeddings.ts";
 import { generateAnswer } from "../_shared/ai-router.ts";
 import { hasPermission } from "../_shared/permissions.ts";
+import { loadIdentity } from "../_shared/permissions.ts";
 import { extractText, getDocumentProxy } from "npm:unpdf@0.11.0";
+import JSZip from "npm:jszip@3.10.1";
 
 const BUCKET = "tyk-documents";
 const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 150;
+const EXPORT_TTL_SECONDS = 600;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -22,6 +25,93 @@ function json(body, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+async function requireAdmin(body) {
+  const identity = await loadIdentity(body);
+  return Boolean(identity?.type === "user" && identity.role === "admin");
+}
+
+async function canDownload(body) {
+  return (await hasPermission(body, "can_download_documents")) ||
+    (await hasPermission(body, "can_upload_documents"));
+}
+
+function safeFileName(name, fallback) {
+  const clean = (name || fallback).replace(/[^\w. -]/g, "_").trim();
+  return clean || fallback;
+}
+
+function csvValue(value) {
+  const text = value == null ? "" : typeof value === "string" ? value : JSON.stringify(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function toCsv(rows) {
+  if (!rows?.length) return "";
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  return [
+    columns.map(csvValue).join(","),
+    ...rows.map((row) => columns.map((column) => csvValue(row[column])).join(",")),
+  ].join("\n");
+}
+
+async function signedExport(bytes, fileName, contentType) {
+  const path = `_exports/${crypto.randomUUID()}-${safeFileName(fileName, "export.zip")}`;
+  const { error: uploadError } = await supabase.storage.from(BUCKET).upload(
+    path,
+    bytes,
+    { contentType, upsert: false },
+  );
+  if (uploadError) throw uploadError;
+  const { data, error } = await supabase.storage
+    .from(BUCKET)
+    .createSignedUrl(path, EXPORT_TTL_SECONDS, { download: fileName });
+  if (error) throw error;
+  return { url: data.signedUrl, expiresIn: EXPORT_TTL_SECONDS };
+}
+
+async function loadKnowledgeExport() {
+  const [documents, chunks, sources, entities, facts, learned, queue, log, conflicts, visual] = await Promise.all([
+    supabase.from("documents").select("*").order("created_at", { ascending: true }),
+    supabase.from("document_chunks").select("*").order("document_id", { ascending: true }).order("chunk_index", { ascending: true }),
+    supabase.from("web_sources").select("*").order("retrieved_at", { ascending: true }),
+    supabase.from("knowledge_entities").select("*"),
+    supabase.from("knowledge_facts").select("*"),
+    supabase.from("learned_answers").select("id, question, normalized_question, intent, answer, status, source_document_ids, search_terms, created_at, last_used_at, reuse_count"),
+    supabase.from("research_queue").select("*"),
+    supabase.from("research_log").select("*"),
+    supabase.from("web_source_conflicts").select("*"),
+    supabase.from("visual_knowledge").select("*"),
+  ]);
+  const result = (response) => response.data || [];
+  return {
+    export_version: "1.0",
+    exported_at: new Date().toISOString(),
+    documents: result(documents),
+    document_chunks: result(chunks),
+    sources: result(sources),
+    entities: result(entities),
+    facts: result(facts),
+    learned_answers: result(learned),
+    research_tasks: result(queue),
+    research_history: result(log),
+    conflicts: result(conflicts),
+    visual_knowledge: result(visual),
+  };
+}
+
+async function createKnowledgeExport() {
+  const knowledge = await loadKnowledgeExport();
+  const zip = new JSZip();
+  zip.file("Knowledge/knowledge.json", JSON.stringify(knowledge, null, 2));
+  zip.file("Knowledge/facts.csv", toCsv(knowledge.facts));
+  zip.file("Knowledge/entities.csv", toCsv(knowledge.entities));
+  zip.file("Knowledge/sources.csv", toCsv(knowledge.sources));
+  zip.file("Research/research_tasks.csv", toCsv(knowledge.research_tasks));
+  zip.file("Research/research_history.csv", toCsv(knowledge.research_history));
+  zip.file("Research/conflicts.csv", toCsv(knowledge.conflicts));
+  return { knowledge, zip };
 }
 
 // Splits page text into overlapping chunks so context isn't cut off mid-idea.
@@ -196,7 +286,11 @@ Deno.serve(async (req) => {
         .order("created_at", { ascending: false });
 
       if (error) return json({ error: error.message }, 500);
-      return json({ documents: data || [] });
+      return json({ documents: (data || []).map((document) => ({
+        ...document,
+        has_file: Boolean(document.file_path),
+        file_path: undefined,
+      })) });
     }
 
     // Deterministic ILIKE search across the shared company document list -
@@ -216,6 +310,93 @@ Deno.serve(async (req) => {
 
       if (error) return json({ error: error.message }, 500);
       return json({ documents: data || [] });
+    }
+
+    if (action === "download") {
+      if (!(await canDownload(body))) return json({ error: "Forbidden" }, 403);
+      const { document_id } = body;
+      const { data: doc, error } = await supabase
+        .from("documents")
+        .select("id, name, file_path")
+        .eq("id", document_id)
+        .single();
+      if (error || !doc?.file_path) return json({ error: "Document file not found." }, 404);
+
+      const { data, error: signedError } = await supabase.storage
+        .from(BUCKET)
+        .createSignedUrl(doc.file_path, EXPORT_TTL_SECONDS, {
+          download: safeFileName(doc.name, "document.pdf"),
+        });
+      if (signedError) return json({ error: "Could not create a secure download." }, 500);
+      return json({ url: data.signedUrl, expiresIn: EXPORT_TTL_SECONDS });
+    }
+
+    if (action === "download-all") {
+      if (!(await canDownload(body))) return json({ error: "Forbidden" }, 403);
+      const { data: docs, error } = await supabase
+        .from("documents")
+        .select("id, name, file_path, file_type")
+        .not("file_path", "is", null)
+        .order("created_at", { ascending: true });
+      if (error) return json({ error: "Could not load documents." }, 500);
+
+      const zip = new JSZip();
+      const names = new Set();
+      for (const doc of docs || []) {
+        const { data: file, error: downloadError } = await supabase.storage.from(BUCKET).download(doc.file_path);
+        if (downloadError || !file) continue;
+        const original = safeFileName(doc.name, `document-${doc.id}.pdf`);
+        const extension = doc.file_type?.includes("plain") && !original.includes(".") ? ".txt" : "";
+        let fileName = `${original}${extension}`;
+        let suffix = 2;
+        while (names.has(fileName)) fileName = `${original} (${suffix++})${extension}`;
+        names.add(fileName);
+        zip.file(`Documents/${fileName}`, new Uint8Array(await file.arrayBuffer()));
+      }
+      const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+      return json({
+        ...(await signedExport(bytes, "TYK-Documents.zip", "application/zip")),
+      });
+    }
+
+    if (action === "export-knowledge") {
+      if (!(await requireAdmin(body))) return json({ error: "Forbidden" }, 403);
+      const { knowledge } = await createKnowledgeExport();
+      const fileName = `TYK-Knowledge-${new Date().toISOString().slice(0, 10)}.json`;
+      const bytes = new TextEncoder().encode(JSON.stringify(knowledge, null, 2));
+      return json({
+        ...(await signedExport(bytes, fileName, "application/json")),
+      });
+    }
+
+    if (action === "export-everything") {
+      if (!(await requireAdmin(body))) return json({ error: "Forbidden" }, 403);
+      const { knowledge, zip } = await createKnowledgeExport();
+      const docs = knowledge.documents.filter((doc) => doc.file_path);
+      const names = new Set();
+      for (const doc of docs) {
+        const { data: file } = await supabase.storage.from(BUCKET).download(doc.file_path);
+        if (!file) continue;
+        const original = safeFileName(doc.name, `document-${doc.id}.pdf`);
+        let fileName = original;
+        let suffix = 2;
+        while (names.has(fileName)) fileName = `${original} (${suffix++})`;
+        names.add(fileName);
+        zip.file(`Documents/${fileName}`, new Uint8Array(await file.arrayBuffer()));
+      }
+      zip.file("Metadata/export-manifest.json", JSON.stringify({
+        export_version: knowledge.export_version,
+        exported_at: knowledge.exported_at,
+        documents: docs.length,
+        knowledge_records: knowledge.facts.length + knowledge.learned_answers.length,
+        sources: knowledge.sources.length,
+        research_tasks: knowledge.research_tasks.length,
+      }, null, 2));
+      zip.file("Metadata/README.txt", "TYK full export. Original documents are in Documents/. Structured knowledge and research records are in Knowledge/ and Research/. Exported " + knowledge.exported_at + ".");
+      const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+      return json({
+        ...(await signedExport(bytes, `TYK-Full-Export-${new Date().toISOString().slice(0, 10)}.zip`, "application/zip")),
+      });
     }
 
     if (action === "request-upload") {

@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { supabase } from "../utils/supabase";
 import {
   deleteDocument,
+  downloadAllDocuments,
+  downloadDocument,
+  exportEverything,
+  exportTykKnowledge,
   listDocuments,
   uploadDocument,
 } from "../utils/documents";
@@ -23,6 +27,7 @@ function DocumentsView({ identity }) {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [exporting, setExporting] = useState("");
   const [errorText, setErrorText] = useState("");
   const fileInputRef = useRef(null);
   const canUpload = identity?.permissions?.can_upload_documents;
@@ -98,6 +103,22 @@ function DocumentsView({ identity }) {
     }
   }
 
+  async function startDownload(action, key) {
+    setExporting(key);
+    setErrorText("");
+    try {
+      const { url } = await action(identity);
+      const link = document.createElement("a");
+      link.href = url;
+      link.click();
+    } catch (err) {
+      console.error("Download/export failed:", err);
+      setErrorText("Download failed. Please try again.");
+    } finally {
+      setExporting("");
+    }
+  }
+
   return (
     <main className="documents-main">
       <div className="documents-header">
@@ -127,6 +148,15 @@ function DocumentsView({ identity }) {
           hidden
           onChange={handleFileChange}
         />
+        <button type="button" className="teach-skip-button" disabled={exporting !== "" || !canUpload} onClick={() => startDownload(downloadAllDocuments, "all")}>
+          {exporting === "all" ? "Preparing…" : "Download All Documents"}
+        </button>
+        <button type="button" className="teach-skip-button" disabled={exporting !== "" || identity?.role !== "admin"} onClick={() => startDownload(exportTykKnowledge, "knowledge")}>
+          {exporting === "knowledge" ? "Preparing…" : "Export TYK Knowledge"}
+        </button>
+        <button type="button" className="teach-skip-button" disabled={exporting !== "" || identity?.role !== "admin"} onClick={() => startDownload(exportEverything, "everything")}>
+          {exporting === "everything" ? "Preparing…" : "Export Everything"}
+        </button>
       </div>
 
       {errorText && <div className="inline-error">{errorText}</div>}
@@ -175,6 +205,16 @@ function DocumentsView({ identity }) {
             <div className={statusClass(doc.status)}>
               {STATUS_LABELS[doc.status] || doc.status}
             </div>
+
+            <button
+              type="button"
+              className="teach-skip-button"
+              disabled={exporting !== "" || !canUpload || !doc.has_file}
+              title={doc.has_file ? "Download original file" : "No original file is stored for this source record"}
+              onClick={() => startDownload((currentIdentity) => downloadDocument(doc.id, currentIdentity), doc.id)}
+            >
+              {exporting === doc.id ? "…" : doc.has_file ? "Download" : "No file stored"}
+            </button>
 
             <button
               type="button"

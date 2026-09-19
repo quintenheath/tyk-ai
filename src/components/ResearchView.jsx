@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../utils/supabase";
+import { exportTykKnowledge } from "../utils/documents";
 
 const STATUS_LABELS = {
   queued: "Queued",
@@ -33,6 +34,7 @@ function ResearchView({ identity }) {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [errorText, setErrorText] = useState("");
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     refresh();
@@ -83,6 +85,21 @@ function ResearchView({ identity }) {
     }
   }
 
+  async function handleExportKnowledge() {
+    setExporting(true);
+    try {
+      const { url } = await exportTykKnowledge(identity);
+      const link = document.createElement("a");
+      link.href = url;
+      link.click();
+    } catch (err) {
+      console.error("Failed to export TYK knowledge:", err);
+      setErrorText("Couldn't export TYK knowledge right now.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <main className="documents-main">
       <div className="documents-header">
@@ -99,6 +116,9 @@ function ResearchView({ identity }) {
       <div className="documents-upload">
         <button type="button" className="upload-button" onClick={handleRunNow} disabled={running}>
           {running ? "Running…" : "Run research now"}
+        </button>
+        <button type="button" className="teach-skip-button" onClick={handleExportKnowledge} disabled={exporting}>
+          {exporting ? "Preparing…" : "Export TYK Knowledge"}
         </button>
       </div>
 
