@@ -824,7 +824,8 @@ async function runResearch() {
         ? await researchCodeSource(task, budget)
         : await runMaintenanceTask(task, budget);
     } catch (err) {
-      outcome = { result: null, failures: err.message };
+      console.error("Research task execution failed:", err);
+      outcome = { result: null, failures: "Research provider or source unavailable; retry scheduled." };
     }
 
     summary.tasksRun++;

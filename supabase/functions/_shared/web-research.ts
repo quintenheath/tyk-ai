@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "./supabase-admin.ts";
 
 const GEMINI_SEARCH_MODEL = Deno.env.get("GEMINI_SEARCH_MODEL") ||
-  Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
+  Deno.env.get("GEMINI_MODEL") || "gemini-3.6-flash";
 const STOP_WORDS = new Set([
   "about", "after", "does", "from", "have", "help", "how", "into",
   "what", "when", "where", "which", "with", "would", "your",
