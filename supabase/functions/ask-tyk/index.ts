@@ -309,7 +309,7 @@ async function findCompanyKnowledgeForVisualAnswer(visionAnswer) {
   return lines.length ? lines.join("\n") : null;
 }
 
-function buildPrompt(question, knowledgeChunks, attachedDocuments, history, summary, topicSummary) {
+function buildPrompt(question, knowledgeChunks, attachedDocuments, history, summary, topicSummary, answerLevel) {
   let context = "";
 
   if (topicSummary) {
@@ -343,12 +343,22 @@ function buildPrompt(question, knowledgeChunks, attachedDocuments, history, summ
     }
   }
 
+  const levelInstruction = {
+    simple: "Use plain language and define technical terms briefly.",
+    standard: "Answer directly with useful commercial-door context, without a technical dump.",
+    detailed: "Include relevant distinctions, exceptions, installation considerations, and source-backed context.",
+    complicated: "Provide a technically comprehensive answer with relationships, compatibility, ratings, exceptions, and standards where supported.",
+  }[answerLevel] || "Answer directly with useful context, without a technical dump.";
+
   return `You are TYK, an AI assistant for commercial door companies.
 
 Your job is to provide accurate, practical answers about commercial doors, frames, hardware, installation, drawings, specifications, building codes, and related construction topics.
 
 IMPORTANT:
 - Answer clearly and directly.
+- Answer level: ${answerLevel || "standard"}. ${levelInstruction}
+- Do not expose internal research steps, search queries, raw evidence dumps, provider details, or raw URLs in the normal answer.
+- Match answer length to the question. A short follow-up should receive a short answer.
 - Do not invent information.
 - If you are unsure, say that you are unsure.
 - Use the knowledge base excerpts and attached documents below as your primary source when they are relevant; otherwise rely on general knowledge.
@@ -753,6 +763,7 @@ Deno.serve(async (req) => {
       history,
       conversationSummary,
       conversationTopicSummary,
+      body?.answerLevel || "standard",
     );
 
     let answer, provider, model, failedProviders;

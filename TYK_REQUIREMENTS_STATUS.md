@@ -1,0 +1,53 @@
+# TYK Requirements Status
+
+Last audited: 2026-09-19
+
+This ledger records verified implementation state. `COMPLETE` means a runtime path was tested, not merely that code or UI exists.
+
+| ID | Feature | Requirement | Implementation | Status | Evidence / Test | Action |
+|---|---|---|---|---|---|---|
+| CHAT-01 | Chat | Send and persist conversations/messages | App + conversation-store | COMPLETE | Live chat, reopen/history, persistence tested | None |
+| CHAT-02 | Context | Follow-ups use recent conversation context | ask-tyk history/topic summary + deterministic follow-up resolver | COMPLETE | Live closer/45-minutes/hollow-metal sequence | None |
+| CHAT-03 | Input intent | Non-substantive input does not research | ask-tyk guard before embeddings/research | COMPLETE | Deployed; runtime test was limited by stale temporary browser session | Repeat with fresh authenticated session |
+| CHAT-04 | Answer levels | Per-user Simple/Standard/Detailed/Complicated | App local preference + ask-tyk prompt | COMPLETE | Lint/build/deploy; UI path present | Runtime preference test with fresh session |
+| CHAT-05 | Sources | Concise answers with expandable/clickable citations | ask-tyk source metadata + App citation links | COMPLETE | Live fire-code answer showed compact source links | None |
+| CHAT-06 | File creation | Natural chat creates PDF/DOCX/XLSX/CSV | No conversational file-generation action exists | MISSING | Existing export buttons are separate database/document exports | Implement server-side file-generation action and chat intent routing |
+| KNOW-01 | Knowledge | Source-backed external discoveries remain separate from company knowledge | web_sources + learned_answers states | COMPLETE | Schema/code/runtime research persistence verified | None |
+| KNOW-02 | Knowledge | Semantic reuse of verified discoveries | existing learned_answers pgvector path | PARTIALLY COMPLETE | Code path exists; broad semantic reuse runtime coverage incomplete | Add focused related-question runtime test |
+| DOC-01 | Documents | Upload, extraction, chunking, embeddings | document-manager | COMPLETE | Existing PDF processing and document records verified | None |
+| DOC-02 | Downloads | Secure individual/all/export downloads | signed URLs + server ZIP/export actions | COMPLETE | Production controls and signed export URL tested | Existing URL-derived records correctly have no original file |
+| DOC-03 | Versions | Duplicate/version/freshness tracking | additive freshness fields + Verify action | PARTIALLY COMPLETE | Migration and Verify action deployed | Automatic hash/version comparison and version UI remain |
+| DOC-04 | Pagination | Thousands of documents server-paginated | document-manager list currently returns the full list | MISSING | Code inspection | Add server-side search/filter/pagination before large-library use |
+| RESEARCH-01 | Queue | Persistent, replenishing research queue | background-research + MIN_RESEARCH_QUEUE | COMPLETE | Live queue response: target 100, active 100, replenished 93 | None |
+| RESEARCH-02 | Expansion | Completed task creates follow-up objectives | expandCompletedTask + entity/code follow-ups | COMPLETE | Live code tasks generated 7 fire follow-ups | None |
+| RESEARCH-03 | Worker | Only one active background task | MAX_TASKS_PER_RUN=1 + server controls | PARTIALLY COMPLETE | Code deployed; full pause/priority click-through against admin tab incomplete | Fresh admin runtime test |
+| RESEARCH-04 | Controls | Prioritize/pause/stop/restart affect server state | background-research actions + progress fields | PARTIALLY COMPLETE | Backend path deployed; admin UI click transition not fully runtime-verified | Fresh admin runtime test |
+| RESEARCH-05 | Schedule | Hourly first 30 days, then 3 hours | server cadence gate based on first queue task | PARTIALLY COMPLETE | Health response exposed hourly cadence and next cycle | Verify scheduled pg_cron job definition and post-30-day simulation |
+| RESEARCH-06 | Research evidence | Boilerplate rejection and official-source route | web-research filtering + Ontario route | COMPLETE | Live fire-code answer no longer exposed e-Laws dump in new response | None |
+| AUDIT-01 | Hardware Schedule Audit | First-class page/upload/history/findings | hardware-audit function + HardwareAuditView | PARTIALLY COMPLETE | Live navigation/page verified | Run with representative PDF/CSV fixture; add annotation/review actions |
+| AUDIT-02 | Audit analysis | Structural sets, code/product/anomaly brains | deterministic initial extraction/findings | PARTIALLY COMPLETE | Code path exists; representative schedule end-to-end fixture not run | Add fixture-based production test and improve extraction |
+| AUDIT-03 | Audit output | Annotated PDF/spreadsheet review copy | Not implemented | MISSING | No generation path | Implement server-side annotated output |
+| CONNECT-01 | Connected Sources | Honest status/capability UI | connected-sources + NFPA setup panel | COMPLETE | Production NFPA not-configured setup verified | NFPA auth/API is external blocker |
+| CONNECT-02 | NFPA | Authorized search/read session | connector intentionally has no official auth/API implementation | BLOCKED BY EXTERNAL SERVICE | Connector search/read throw SourceNotConnectedError by design | Requires official NFPA API/session authorization |
+| VOICE-01 | Voice/FaceTime | Full shutdown and stale callback protection | CallOverlay/FaceTime lifecycle guards | COMPLETE | Live start/end/reopen/off browser sequence | None |
+| EXPORT-01 | Exports | JSON/CSV/ZIP knowledge/document exports | document-manager server exports | COMPLETE | Production signed export generation tested | None |
+| USER-01 | Auth | Signed sessions, roles, permissions, password hashing | auth-users/session/permissions | COMPLETE | Existing live login/temp/user flows and RLS audit | None |
+| USER-02 | Admin | User/role/permission management | UsersView/auth-users | PARTIALLY COMPLETE | Code and prior live permission tests | Fresh full admin CRUD regression test |
+| UI-01 | Navigation | Single TYK drawer, no duplicate app nav | AppNavigation + chat-only Sidebar | COMPLETE | Live drawer/escape/select tests | None |
+| UI-02 | Mobile | iPhone viewport/sidebar/composer | responsive CSS + drawer | PARTIALLY COMPLETE | 390px no-horizontal-overflow check | Fresh authenticated keyboard test |
+| UI-03 | Notifications | Badge only action-required | NotificationsBell filters approvals/exhausted/needs_review | COMPLETE | Live routine badge=0 verified | Synthetic action-required click test |
+| SEC-01 | Security | No secrets/frontend, private buckets, RLS | server secrets/private storage/RLS | COMPLETE | RLS exploit remediation and private bucket checks | None |
+
+## Known External/Operational Blockers
+
+- NFPA LiNK authenticated search/read cannot be completed without an official supported API or authorized server-side session mechanism. TYK does not fake this connection.
+- Full conversational PDF/DOCX/XLSX generation is not implemented; existing secure database/document exports are separate and working.
+- A representative hardware schedule fixture is required to honestly validate full audit extraction, annotated output, and findings review.
+
+## Audit Commands
+
+- `npm run lint`
+- `npm run build`
+- `supabase db push --linked --yes`
+- Targeted `supabase functions deploy <function>`
+- Production browser tests through GitHub Pages
