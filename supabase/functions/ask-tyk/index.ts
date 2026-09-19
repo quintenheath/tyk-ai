@@ -166,6 +166,16 @@ function decideWebResearch(isPlainTextQuestion, knowledgeChunks) {
   };
 }
 
+function contextualResearchQuestion(question, history) {
+  const clean = question.trim();
+  const isFollowUp = clean.length < 80 || /^(what about|how about|why|how|what if|would that|does that|45 minutes?|60 minutes?|90 minutes?|hollow metal|steel door|aluminum door)$/i.test(clean);
+  if (!isFollowUp || !history?.length) return question;
+  const context = history.slice(-4)
+    .map((turn) => `${turn.role === "assistant" ? "TYK" : "User"}: ${turn.content}`)
+    .join("\n");
+  return `Answer this follow-up in the existing conversation.\n${context}\nLatest user detail/question: ${question}`;
+}
+
 function webSourceCitations(sources) {
   return (sources || []).map((source) => ({
     document: source.title,
@@ -351,6 +361,7 @@ Deno.serve(async (req) => {
 
     const startedAt = Date.now();
     const normalizedQuestion = normalizeQuestion(question);
+    const researchQuestion = contextualResearchQuestion(question, history);
 
     const isPlainTextQuestion = images.length === 0 &&
       attachedDocumentIds.length === 0;
@@ -498,7 +509,7 @@ Deno.serve(async (req) => {
     const researchDecision = decideWebResearch(isPlainTextQuestion, knowledgeChunks);
 
     if (isPlainTextQuestion && researchDecision.needsWebResearch) {
-      const savedSource = await findSavedWebSource(normalizedQuestion);
+      const savedSource = await findSavedWebSource(researchQuestion);
       if (savedSource) {
         logAiUsage({
           question: normalizedQuestion,
@@ -538,10 +549,10 @@ Deno.serve(async (req) => {
 
       if (isFireCodeQuestion(normalizedQuestion)) {
         try {
-          const officialResearch = await researchKnownAuthoritativeSource(normalizedQuestion);
+          const officialResearch = await researchKnownAuthoritativeSource(researchQuestion);
           if (officialResearch) {
             await saveWebResearch(officialResearch, conversationId);
-            const researchedAnswer = `${officialResearch.answer}\n\nSources:\n${officialResearch.sources.map((source) => `- ${source.title} (${source.url})`).join("\n")}`;
+            const researchedAnswer = officialResearch.answer;
             logAiUsage({
               question: normalizedQuestion,
               intent: "official_code_research",
@@ -578,15 +589,12 @@ Deno.serve(async (req) => {
 
     if (researchDecision.needsWebResearch) {
       try {
-        const research = await researchWeb(normalizedQuestion);
+        const research = await researchWeb(researchQuestion);
         if (research) {
           await saveWebResearch(research, conversationId);
-          const sourceLines = research.sources
-            .map((source) => `- ${source.title} (${source.url})`)
-            .join("\n");
           const researchedAnswer = research.ambiguity
-            ? `${research.answer}\n\nEvidence note: ${research.ambiguity}\n\nSources:\n${sourceLines}`
-            : `${research.answer}\n\nSources:\n${sourceLines}`;
+            ? `${research.answer}\n\nEvidence note: ${research.ambiguity}`
+            : research.answer;
           if (questionEmbedding && !suppressLearning) {
             await saveLearnedAnswer({
               question,

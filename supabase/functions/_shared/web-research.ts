@@ -128,6 +128,10 @@ function stripHtml(html) {
     .trim();
 }
 
+function isBoilerplate(text) {
+  return !text || /e-laws needs javascript|enable javascript|cookie settings|privacy policy|accept cookies|sign in to continue|page not found/i.test(text);
+}
+
 async function fetchText(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
@@ -157,7 +161,8 @@ export async function researchKnownAuthoritativeSource(question) {
   for (const source of CODE_SOURCES) {
     const text = await fetchText(source.url);
     if (!text) continue;
-    const evidence = relevantEvidence(text, question) || text.slice(0, 1800);
+    const evidence = relevantEvidence(text, question);
+    if (isBoilerplate(evidence)) continue;
     sources.push({
       ...source,
       url: source.url,
@@ -170,14 +175,14 @@ export async function researchKnownAuthoritativeSource(question) {
 
   const sourceList = sources.map((source) => `- ${source.title}: ${source.url}`).join("\n");
   return {
-    answer: `I found the current Ontario Building Code and Ontario Fire Code sources. The exact hardware requirements depend on the opening's fire-resistance rating, use/egress function, labeled/listed assembly, and applicable code edition. Relevant retrieved evidence:\n\n${sources.map((source) => `${source.title}:\n${source.evidenceText}`).join("\n\n")}`,
+    answer: "For a fire-rated opening, the basic hardware depends on the rating, door/frame assembly, use, and listed hardware application. The controlling Ontario sources are identified below; I will not call a universal hardware list a code requirement without the specific applicable section.",
     title: "Ontario Fire-Rated Opening Hardware Requirements",
     topicSummary: "Research into Ontario fire-rated opening hardware requirements, including rating, self-closing, latching, egress, and listed assembly conditions.",
     topic: "Ontario fire-rated opening hardware requirements",
     entityName: null,
-    confidence: "medium",
+    confidence: "low",
     facts: [],
-    ambiguity: "The retrieved code pages identify the governing sources, but the exact hardware list depends on the opening rating, use, and assembly details.",
+    ambiguity: "The official pages were reachable but did not expose the relevant sections in server-readable HTML; the exact hardware list still requires a section-level source check.",
     searchQueries: buildSearchQueries(question),
     sources,
     provider: "official_ontario_sources",
