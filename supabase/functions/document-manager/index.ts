@@ -278,19 +278,25 @@ Deno.serve(async (req) => {
     const { action } = body;
 
     if (action === "list") {
-      const { data, error } = await supabase
-        .from("documents")
-        .select(
-          "id, name, description, file_type, file_size, category, manufacturer, product, product_family, document_type, topics, part_numbers, model_numbers, document_date, version_label, publication_date, effective_date, verification_status, last_verified_at, next_verification_at, document_family_id, source_url, status, error_message, chunk_count, created_at, file_path",
-        )
-        .order("created_at", { ascending: false });
+      const page = Math.max(1, Number(body.page) || 1);
+      const pageSize = Math.min(100, Math.max(1, Number(body.page_size) || 50));
+      const from = (page - 1) * pageSize;
+      const to = from + pageSize - 1;
+      const search = (body.search || "").trim();
+      let query = supabase.from("documents").select(
+        "id, name, description, file_type, file_size, category, manufacturer, product, product_family, document_type, topics, part_numbers, model_numbers, document_date, version_label, publication_date, effective_date, verification_status, last_verified_at, next_verification_at, document_family_id, source_url, status, error_message, chunk_count, created_at, file_path",
+        { count: "exact" },
+      ).order("created_at", { ascending: false }).range(from, to);
+      if (search) query = query.or(`name.ilike.%${search}%,manufacturer.ilike.%${search}%,product.ilike.%${search}%,document_type.ilike.%${search}%`);
+      const { data: pagedData, error: pagedError, count } = await query;
+      const rows = pagedData || [];
 
-      if (error) return json({ error: error.message }, 500);
-      return json({ documents: (data || []).map((document) => ({
+      if (pagedError) return json({ error: pagedError.message }, 500);
+      return json({ documents: rows.map((document) => ({
         ...document,
         has_file: Boolean(document.file_path),
         file_path: undefined,
-      })) });
+      })), page, pageSize, total: count || 0, hasMore: (count || 0) > to + 1 });
     }
 
     if (action === "verify") {

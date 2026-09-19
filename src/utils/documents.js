@@ -21,9 +21,8 @@ async function invokeDocumentManager(payload) {
   return data;
 }
 
-export async function listDocuments() {
-  const { documents } = await invokeDocumentManager({ action: "list" });
-  return documents || [];
+export async function listDocuments({ page = 1, pageSize = 50, search = "" } = {}) {
+  return invokeDocumentManager({ action: "list", page, page_size: pageSize, search });
 }
 
 export async function deleteDocument(documentId, identity) {

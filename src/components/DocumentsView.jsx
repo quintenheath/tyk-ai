@@ -26,6 +26,9 @@ function statusClass(status) {
 
 function DocumentsView({ identity }) {
   const [documents, setDocuments] = useState([]);
+  const [page, setPage] = useState(1);
+  const [totalDocuments, setTotalDocuments] = useState(0);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState("");
@@ -63,11 +66,14 @@ function DocumentsView({ identity }) {
       clearInterval(interval);
       supabase.removeChannel(channel);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, search]);
 
   async function refresh() {
     try {
-      setDocuments(await listDocuments());
+      const result = await listDocuments({ page, search });
+      setDocuments(result.documents || []);
+      setTotalDocuments(result.total || 0);
     } catch (err) {
       console.error("Failed to load documents:", err);
     } finally {
@@ -175,6 +181,8 @@ function DocumentsView({ identity }) {
 
       {errorText && <div className="inline-error">{errorText}</div>}
 
+      <input className="documents-search" value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder="Search documents…" />
+
       <div className="documents-list">
         {loading && <div className="documents-empty">Loading…</div>}
 
@@ -250,6 +258,13 @@ function DocumentsView({ identity }) {
           </div>
         ))}
       </div>
+      {!loading && totalDocuments > 50 && (
+        <div className="documents-pagination">
+          <button type="button" className="teach-skip-button" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</button>
+          <span>Page {page} of {Math.ceil(totalDocuments / 50)}</span>
+          <button type="button" className="teach-skip-button" disabled={page >= Math.ceil(totalDocuments / 50)} onClick={() => setPage((value) => value + 1)}>Next</button>
+        </div>
+      )}
     </main>
   );
 }

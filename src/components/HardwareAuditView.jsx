@@ -66,6 +66,16 @@ function HardwareAuditView({ identity }) {
     }
   }
 
+  async function reviewFinding(finding, status) {
+    try {
+      await invokeAudit({ action: "review", finding_id: finding.id, status, token: identity?.token });
+      if (selected?.audit?.id) await openAudit(selected.audit.id);
+    } catch (error) {
+      console.error("Failed to review finding:", error);
+      setErrorText("Could not update that audit finding.");
+    }
+  }
+
   return (
     <main className="documents-main">
       <div className="documents-header">
@@ -94,6 +104,11 @@ function HardwareAuditView({ identity }) {
               <div className="teach-history-answer">{finding.description}</div>
               {finding.recommendation && <div className="document-meta">Recommendation: {finding.recommendation}</div>}
               <div className="document-meta">Evidence state: {finding.evidence?.state || "NEEDS_REVIEW"}</div>
+              <div className="teach-answer-actions">
+                <button type="button" className="teach-skip-button" onClick={() => reviewFinding(finding, "ACKNOWLEDGED")}>Acknowledge</button>
+                <button type="button" className="teach-skip-button" onClick={() => reviewFinding(finding, "DISMISSED")}>Dismiss</button>
+                <button type="button" className="teach-skip-button" onClick={() => reviewFinding(finding, "RESEARCH_MORE")}>Research more</button>
+              </div>
             </div>
           ))}
         </div>
