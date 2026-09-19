@@ -414,7 +414,11 @@ function App() {
           isOpen={isNavigationOpen}
           onSelectView={(nextView) => {
             setOverlay(null);
-            setStandaloneView(nextView);
+            if (nextView === "home") {
+              handleNewChat();
+            } else {
+              setStandaloneView(nextView);
+            }
           }}
           onStartOverlay={handleStartOverlay}
           onClose={closeNavigation}
