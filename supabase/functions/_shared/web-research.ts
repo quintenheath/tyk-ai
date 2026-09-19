@@ -7,6 +7,25 @@ const STOP_WORDS = new Set([
   "what", "when", "where", "which", "with", "would", "your",
 ]);
 
+const CODE_SOURCES = [
+  {
+    url: "https://www.ontario.ca/laws/regulation/120332",
+    title: "Ontario Building Code",
+    domain: "ontario.ca",
+    sourceType: "government",
+  },
+  {
+    url: "https://www.ontario.ca/laws/regulation/070213",
+    title: "Ontario Fire Code",
+    domain: "ontario.ca",
+    sourceType: "government",
+  },
+];
+
+export function isFireCodeQuestion(question) {
+  return /fire[- ]rated|fire door|fire[- ]door assembly|fire opening|rated opening|rated door|fire separation|fire exit|panic hardware|exit hardware|latching hardware|self[- ]closing|positive latching|fire rating|hourly rating|\b(?:20|45|60|90|180)[ -]?minute\b|fire code|building code|ontario (?:building|fire) code|\bnfpa\b|\bulc?\b|can\/ulc|listed hardware|labeled hardware|closer/i.test(question);
+}
+
 function cleanTerm(term) {
   return term.replace(/[^a-z0-9-]/gi, "").toLowerCase();
 }
@@ -24,6 +43,16 @@ function buildSearchQueries(question) {
   const clean = question.trim().replace(/[?!.]+$/, "");
   const designation = clean.match(/\b(?:what is|what are|tell me about)\s+([a-z0-9-]+)\b/i)?.[1];
   const queries = [clean];
+  if (isFireCodeQuestion(clean)) {
+    queries.push(
+      `${clean} Ontario fire rated door hardware requirements`,
+      `${clean} Ontario Building Code fire door hardware`,
+      `${clean} Ontario Fire Code fire door hardware`,
+      `${clean} self closing latching hardware fire separation`,
+      `${clean} listed labeled hardware ULC fire door assembly`,
+    );
+    return [...new Set(queries)].slice(0, 6);
+  }
   if (designation && /^\d+[a-z0-9-]*$/i.test(designation)) {
     queries.push(
       `${designation} commercial door hardware`,
@@ -84,9 +113,78 @@ function normalizeSources(groundingChunks, groundingSupports) {
 function authoritativeRank(domain) {
   if (!domain) return 0;
   if (/\.gov$|\.gov\.|\.gc\.ca$|\.gc\.ca\//i.test(domain)) return 7;
+  if (/ontario\.ca|nfpa\.org|ul\.com|ulc\.ca|codes\.icc\.cs/i.test(domain)) return 7;
   if (/allegion|vonduprin|lcnhardware|assaabloy|dormakaba|hager|ives|rockwood/i.test(domain)) return 6;
   if (/manufacturer|supplier|distributor/i.test(domain)) return 5;
   return 1;
+}
+
+function stripHtml(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&amp;|&#\d+;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function fetchText(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) return null;
+    return stripHtml(await response.text());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function relevantEvidence(text, question) {
+  const terms = questionTerms(question).filter((term) => term.length > 3);
+  const matches = [];
+  for (const term of terms) {
+    const index = text.toLowerCase().indexOf(term);
+    if (index >= 0) matches.push(text.slice(Math.max(0, index - 220), index + 620));
+  }
+  return [...new Set(matches)].slice(0, 4).join("\n\n").slice(0, 3000);
+}
+
+export async function researchKnownAuthoritativeSource(question) {
+  if (!isFireCodeQuestion(question)) return null;
+
+  const sources = [];
+  for (const source of CODE_SOURCES) {
+    const text = await fetchText(source.url);
+    if (!text) continue;
+    const evidence = relevantEvidence(text, question) || text.slice(0, 1800);
+    sources.push({
+      ...source,
+      url: source.url,
+      title: source.title,
+      evidenceText: evidence,
+      authoritative: true,
+    });
+  }
+  if (!sources.length) return null;
+
+  const sourceList = sources.map((source) => `- ${source.title}: ${source.url}`).join("\n");
+  return {
+    answer: `I found the current Ontario Building Code and Ontario Fire Code sources. The exact hardware requirements depend on the opening's fire-resistance rating, use/egress function, labeled/listed assembly, and applicable code edition. Relevant retrieved evidence:\n\n${sources.map((source) => `${source.title}:\n${source.evidenceText}`).join("\n\n")}`,
+    title: "Ontario Fire-Rated Opening Hardware Requirements",
+    topicSummary: "Research into Ontario fire-rated opening hardware requirements, including rating, self-closing, latching, egress, and listed assembly conditions.",
+    topic: "Ontario fire-rated opening hardware requirements",
+    entityName: null,
+    confidence: "medium",
+    facts: [],
+    ambiguity: "The retrieved code pages identify the governing sources, but the exact hardware list depends on the opening rating, use, and assembly details.",
+    searchQueries: buildSearchQueries(question),
+    sources,
+    provider: "official_ontario_sources",
+    model: "deterministic_source_fetch",
+    sourceList,
+  };
 }
 
 function sortSources(sources) {
@@ -239,6 +337,37 @@ export async function saveWebResearch(research, conversationId = null) {
       });
     } catch (error) {
       console.error("Failed to save web-source conflict (ignored):", error);
+    }
+  }
+
+  if (isFireCodeQuestion(research.topic || "")) {
+    const followups = [
+      "Research Ontario fire door assembly self-closing requirements",
+      "Research Ontario fire door positive latching requirements",
+      "Research Ontario fire-rated opening exit hardware requirements",
+      "Research Ontario panic and fire exit hardware requirements",
+      "Research Ontario electrified hardware on fire-rated openings",
+      "Research Ontario ULC and labeled fire door assembly requirements",
+      "Research Ontario fire door inspection and maintenance requirements",
+    ];
+    const { data: existing } = await supabaseAdmin
+      .from("research_queue")
+      .select("topic")
+      .in("topic", followups);
+    const known = new Set((existing || []).map((task) => task.topic));
+    for (const title of followups) {
+      if (known.has(title)) continue;
+      await supabaseAdmin.from("research_queue").insert({
+        topic: title,
+        title,
+        description: "Follow-up evidence research generated from an Ontario fire/code question.",
+        type: "RESEARCH",
+        priority: 9,
+        source_type: "government",
+        search_queries: [title, "Ontario Building Code", "Ontario Fire Code"],
+        reason: "Fire/life-safety research has higher priority and requires authoritative evidence.",
+        status: "queued",
+      });
     }
   }
 }

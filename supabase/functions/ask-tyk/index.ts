@@ -10,6 +10,8 @@ import { getActiveConnector } from "../_shared/connected-sources/registry.ts";
 import { SourceNotConnectedError } from "../_shared/connected-sources/types.ts";
 import {
   findSavedWebSource,
+  isFireCodeQuestion,
+  researchKnownAuthoritativeSource,
   researchWeb,
   saveWebResearch,
 } from "../_shared/web-research.ts";
@@ -532,6 +534,45 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           },
         );
+      }
+
+      if (isFireCodeQuestion(normalizedQuestion)) {
+        try {
+          const officialResearch = await researchKnownAuthoritativeSource(normalizedQuestion);
+          if (officialResearch) {
+            await saveWebResearch(officialResearch, conversationId);
+            const researchedAnswer = `${officialResearch.answer}\n\nSources:\n${officialResearch.sources.map((source) => `- ${source.title} (${source.url})`).join("\n")}`;
+            logAiUsage({
+              question: normalizedQuestion,
+              intent: "official_code_research",
+              source_used: officialResearch.provider,
+              ai_required: false,
+              latency_ms: Date.now() - startedAt,
+            });
+
+            return new Response(
+              JSON.stringify({
+                success: true,
+                answer: researchedAnswer,
+                sources: webSourceCitations(officialResearch.sources),
+                aiRequired: false,
+                needsWebResearch: true,
+                researchReason: "Official Ontario code sources were fetched before any unresolved fallback.",
+                conversationMeta: {
+                  title: officialResearch.title,
+                  topicSummary: officialResearch.topicSummary,
+                  source: "official_code_research",
+                },
+              }),
+              {
+                status: 200,
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+        } catch (err) {
+          console.error("Official code research failed (continuing to Google/AI):", err);
+        }
       }
     }
 
