@@ -20,6 +20,7 @@ const corsHeaders = {
 // crawl or a runaway AI bill.
 // ---------------------------------------------------------------------------
 const MAX_TASKS_PER_RUN = 5;
+const MIN_RESEARCH_QUEUE = Number(Deno.env.get("MIN_RESEARCH_QUEUE") || 100);
 const MAX_AI_CALLS_PER_RUN = 5;
 const MAX_WEB_REQUESTS_PER_RUN = 10;
 const MAX_ATTEMPTS = 3;
@@ -226,6 +227,128 @@ async function createResearchFollowups(discoveredKnowledge) {
       status: "queued",
     });
   }
+}
+
+async function insertResearchTasks(tasks) {
+  if (!tasks.length) return 0;
+  const topics = tasks.map((task) => task.topic);
+  const { data: existing } = await supabase
+    .from("research_queue")
+    .select("topic")
+    .in("topic", topics);
+  const known = new Set((existing || []).map((task) => task.topic));
+  let created = 0;
+  for (const task of tasks) {
+    if (known.has(task.topic)) continue;
+    const { error } = await supabase.from("research_queue").insert({
+      ...task,
+      status: task.status || "queued",
+      source_type: task.source_type || "web_search",
+      priority: task.priority || 6,
+    });
+    if (!error) {
+      known.add(task.topic);
+      created++;
+    }
+  }
+  return created;
+}
+
+async function expandCompletedTask(task, outcome) {
+  const topics = [];
+  const taskText = `${task.topic} ${task.title || ""}`;
+  if (/Ontario Fire Code|Ontario Building Code/i.test(taskText)) {
+    const codeName = /Fire Code/i.test(taskText) ? "Ontario Fire Code" : "Ontario Building Code";
+    const subjects = [
+      "current edition and effective date",
+      "fire separation requirements",
+      "fire door assembly requirements",
+      "self-closing requirements",
+      "positive latching requirements",
+      "exit and egress requirements",
+      "panic and fire exit hardware requirements",
+      "hold-open and automatic operator requirements",
+      "access control and electrified hardware requirements",
+      "door and frame labeling requirements",
+      "referenced standards and definitions",
+      "exceptions and exemptions",
+      "inspection and maintenance requirements",
+      "changes from the previous edition",
+    ];
+    topics.push(...subjects.map((subject) => ({
+      topic: `Research ${codeName} ${subject}`,
+      title: `Research ${codeName} ${subject}`,
+      description: `Investigate this specific follow-up objective discovered while expanding ${codeName}.`,
+      type: "RESEARCH",
+      priority: 9,
+      source_type: "government",
+      search_queries: [`${codeName} ${subject}`, `${codeName} official ${subject}`],
+      reason: `Follow-up generated from completed ${codeName} source research.`,
+    })));
+  }
+
+  if (/verify all indexed source urls/i.test(taskText)) {
+    topics.push({
+      topic: `Reverify indexed source URLs (${new Date().toISOString().slice(0, 7)})`,
+      title: "Reverify indexed source URLs",
+      description: "Recheck current indexed source URLs for availability and changed documents.",
+      type: "VERIFY",
+      priority: 5,
+      source_type: "other",
+      reason: "Periodic source maintenance objective.",
+    });
+  }
+
+  if (outcome?.discoveredKnowledge?.entityName) {
+    const name = outcome.discoveredKnowledge.entityName;
+    topics.push(...[
+      "product page",
+      "installation manual",
+      "current catalog",
+      "technical bulletins",
+      "compatible accessories and related models",
+      "current documentation revision",
+    ].map((subject) => ({
+      topic: `Research ${name} ${subject}`,
+      title: `Research ${name} ${subject}`,
+      description: `Follow-up research generated from the discovered entity ${name}.`,
+      type: "RESEARCH",
+      priority: 7,
+      source_type: "web_search",
+      search_queries: [`${name} ${subject}`, `${name} official documentation`],
+      entity_name: name,
+      reason: "A completed research task revealed additional legitimate research objectives.",
+    })));
+  }
+
+  return insertResearchTasks(topics);
+}
+
+async function ensureMinimumQueue() {
+  const { count } = await supabase
+    .from("research_queue")
+    .select("id", { count: "exact", head: true })
+    .in("status", ["queued", "researching", "reverify", "needs_review"]);
+  const deficit = MIN_RESEARCH_QUEUE - (count || 0);
+  if (deficit <= 0) return 0;
+
+  const cycle = new Date().toISOString().slice(0, 7);
+  const tasks = RESEARCH_AREAS.flatMap((area) => [
+    { area, subject: "coverage" },
+    ...RESEARCH_VARIANTS.map((variant) => ({ area, subject: variant.toLowerCase() })),
+  ]).map(({ area, subject }) => {
+    return {
+      topic: `Reverify ${area} ${subject} (${cycle})`,
+      title: `Reverify ${area} ${subject}`,
+      description: `Review known evidence and identify the next missing source, document, relationship, or current revision for ${area}.`,
+      type: "RESEARCH",
+      priority: /fire|exit|compatibility|installation/i.test(area) ? 7 : 4,
+      source_type: "web_search",
+      search_queries: [area, `${area} current documentation`, `${area} manufacturer technical bulletin`],
+      reason: "Minimum backlog maintenance: reverify an active knowledge area and generate its next gaps.",
+    };
+  });
+  return insertResearchTasks(tasks.slice(0, deficit));
 }
 
 // Any manufacturer/supplier with a COMPANY-CONFIRMED website but a missing
@@ -604,6 +727,7 @@ async function runResearch() {
   await ensureCodeTasks();
   await ensureResearchAreaTasks();
   await generateGapTasks();
+  await ensureMinimumQueue();
 
   const { count: queuedCount } = await supabase
     .from("research_queue")
@@ -680,6 +804,10 @@ async function runResearch() {
       await replenishAfterCompletion(task);
     }
 
+    const followUpTasksCreated = nextStatus === "done"
+      ? await expandCompletedTask(task, outcome)
+      : 0;
+
     await logResearch({
       task_id: task.id,
       task_topic: task.topic,
@@ -692,7 +820,24 @@ async function runResearch() {
       failures: outcome.failures || null,
       changes_discovered: outcome.changesDiscovered || null,
     });
+
+    await supabase.from("research_queue").update({
+      research_depth: (task.research_depth || 0) + 1,
+      research_attempts: (task.research_attempts || 0) + 1,
+      sources_checked: outcome.documentsFound || 0,
+      authoritative_sources_found: outcome.documentsFound || 0,
+      follow_up_tasks_created: followUpTasksCreated,
+      knowledge_records_created: outcome.knowledgeCreated || 0,
+      completeness_state: outcome.failures
+        ? "RESEARCH_BLOCKED"
+        : followUpTasksCreated > 0
+        ? "PARTIALLY_RESEARCHED"
+        : "WELL_RESEARCHED",
+      next_research_at: nextDate,
+    }).eq("id", task.id);
   }
+
+  summary.queueReplenished = await ensureMinimumQueue();
 
   return summary;
 }
