@@ -158,6 +158,7 @@ async function ensureResearchAreaTasks() {
     .in("topic", topics);
   const existingByTopic = new Map((existing || []).map((task) => [task.topic, task]));
   const now = new Date().toISOString();
+  const missingTasks = [];
 
   for (const area of RESEARCH_AREAS) {
     const taskDefinitions = [
@@ -179,7 +180,7 @@ async function ensureResearchAreaTasks() {
       }
       if (current) continue;
 
-      await supabase.from("research_queue").insert({
+      missingTasks.push({
         topic: title,
         title,
         description: `Find authoritative, reusable evidence about ${area}; prefer official, standards, manufacturer, and authorized technical sources.`,
@@ -192,6 +193,8 @@ async function ensureResearchAreaTasks() {
       });
     }
   }
+
+  if (missingTasks.length) await supabase.from("research_queue").insert(missingTasks);
 }
 
 async function createResearchFollowups(discoveredKnowledge) {
