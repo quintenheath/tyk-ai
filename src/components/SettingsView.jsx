@@ -21,6 +21,7 @@ function SettingsView({ identity }) {
   const [activeWork, setActiveWork] = useState([]);
   const [researchCount, setResearchCount] = useState(0);
   const [checkingProvider, setCheckingProvider] = useState(null);
+  const [setupSource, setSetupSource] = useState(null);
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
   const canApprove = identity?.permissions?.can_approve_company_knowledge;
@@ -107,6 +108,14 @@ function SettingsView({ identity }) {
     } finally {
       setCheckingProvider(null);
     }
+  }
+
+  function sourceAction(source) {
+    if (source.provider === "nfpa_link" && source.status !== "connected") {
+      setSetupSource(source);
+      return;
+    }
+    checkConnection(source.provider);
   }
 
   return (
@@ -197,10 +206,16 @@ function SettingsView({ identity }) {
             <button
               type="button"
               className="teach-skip-button"
-              onClick={() => checkConnection(source.provider)}
+              onClick={() => sourceAction(source)}
               disabled={checkingProvider === source.provider}
             >
-              {checkingProvider === source.provider ? "…" : "Check Connection"}
+              {checkingProvider === source.provider
+                ? "…"
+                : source.status === "connected"
+                ? "Check Connection"
+                : source.authentication_status === "error" || source.status === "error"
+                ? "Reconnect NFPA LiNK"
+                : "Connect NFPA LiNK"}
             </button>
           </div>
         ))}
@@ -254,6 +269,57 @@ function SettingsView({ identity }) {
           {pending.length === 0 && activeWork.length === 0 && (
             <div className="documents-empty">Research queue is replenishing.</div>
           )}
+        </div>
+      )}
+
+      {setupSource && (
+        <div className="overlay-backdrop" onClick={() => setSetupSource(null)}>
+          <section
+            className="source-setup-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="nfpa-setup-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="source-setup-header">
+              <div>
+                <h2 id="nfpa-setup-title">NFPA LiNK</h2>
+                <p>Connect TYK to your authorized NFPA LiNK access.</p>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setSetupSource(null)} aria-label="Close setup">
+                ✕
+              </button>
+            </div>
+
+            <div className="document-meta source-capabilities">
+              {setupSource.capabilities?.map((capability) => (
+                <span className="document-tag" key={capability}>{capability}</span>
+              ))}
+            </div>
+
+            <div className="source-setup-status">
+              Status: {setupSource.authentication_status === "not_configured" ? "Not connected" : "Reconnect required"}
+            </div>
+
+            <p className="source-setup-copy">
+              This installation does not have an official NFPA OAuth/API authorization flow implemented.
+              TYK will not collect or store NFPA credentials in the browser and will not bypass NFPA LiNK's protected viewer.
+            </p>
+            <p className="source-setup-copy">
+              To enable this connector, an administrator must configure an authorized NFPA server-side session token
+              using the Supabase Edge Function secret <strong>NFPA_LINK_SESSION_TOKEN</strong>. The current connector
+              will report the configured state honestly; search and read still require an officially authorized NFPA API
+              or connector implementation.
+            </p>
+            <div className="source-setup-actions">
+              <button type="button" className="teach-skip-button" onClick={() => setSetupSource(null)}>
+                Close
+              </button>
+              <button type="button" className="upload-button" onClick={() => checkConnection(setupSource.provider)}>
+                Check server configuration
+              </button>
+            </div>
+          </section>
         </div>
       )}
     </main>
