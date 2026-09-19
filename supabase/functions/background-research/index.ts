@@ -810,23 +810,13 @@ async function runResearch() {
     await generateMaintenanceTasks();
   }
 
-  const { data: tasks } = await supabase
-    .from("research_queue")
-    .select("*")
-    .in("status", ["queued", "reverify", "failed"])
-    .lt("attempts", MAX_ATTEMPTS)
-    .or(`next_research_date.is.null,next_research_date.lte.${new Date().toISOString()}`)
-    .order("priority", { ascending: false })
-    .order("updated_at", { ascending: true })
-    .limit(MAX_TASKS_PER_RUN);
+  const { data: tasks } = await supabase.rpc("claim_next_research_task");
 
   const budget = { aiCalls: 0, webRequests: 0 };
   const summary = { tasksRun: 0, documentsFound: 0, knowledgeCreated: 0, failures: 0 };
 
   for (const task of tasks || []) {
     if (budget.webRequests >= MAX_WEB_REQUESTS_PER_RUN) break;
-
-    await supabase.from("research_queue").update({ status: "researching" }).eq("id", task.id);
 
     const isCodeSource = SEED_CODE_SOURCES.some((s) => s.topic === task.topic);
     let outcome;
