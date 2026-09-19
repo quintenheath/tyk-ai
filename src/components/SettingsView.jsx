@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { supabase } from "../utils/supabase";
 import { approvePromotion, listPendingPromotions } from "../utils/conversations";
 
+const NFPA_80_STANDARD_DEVELOPMENT_URL =
+  "https://www.nfpa.org/en/for-professionals/codes-and-standards/standards-development";
+
 const SOURCE_LABELS = {
   calculator: "Calculator",
   documents_table: "Document metadata",
@@ -315,14 +318,14 @@ function SettingsView({ identity }) {
               <button type="button" className="teach-skip-button" onClick={() => setSetupSource(null)}>
                 Close
               </button>
-              {setupSource.source_url && (
+              {setupSource.provider === "nfpa_link" && (
                 <a
                   className="teach-skip-button source-setup-link"
-                  href={setupSource.source_url}
+                  href={NFPA_80_STANDARD_DEVELOPMENT_URL}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Open official NFPA LiNK
+                  Open NFPA 80 Standard Development
                 </a>
               )}
               <button type="button" className="upload-button" onClick={() => checkConnection(setupSource.provider)}>
