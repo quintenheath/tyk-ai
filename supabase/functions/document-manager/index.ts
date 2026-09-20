@@ -13,6 +13,7 @@ const BUCKET = "tyk-documents";
 const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 150;
 const EXPORT_TTL_SECONDS = 600;
+const PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -178,18 +179,36 @@ ${sampleText}`;
   }
 }
 
+function deterministicMetadata(name, sampleText) {
+  const text = `${name}\n${sampleText}`;
+  const nfpa = /\bnfpa\b/i.test(text);
+  const standard = /standard for|standard|code|regulation/i.test(text);
+  const manufacturer = nfpa ? "NFPA" : /\b(allegion|von duprin|lcn|hager|sargent|schlage|dormakaba)\b/i.exec(text)?.[1] || null;
+  const documentType = nfpa && standard ? "STANDARD" : /hardware schedule|door schedule/i.test(text) ? "HARDWARE_SCHEDULE" : /installation manual|installation instructions/i.test(text) ? "INSTALLATION_MANUAL" : /catalog/i.test(text) ? "CATALOG" : null;
+  const version = text.match(/\b(?:edition|rev(?:ision)?|version)\s*[:#-]?\s*([0-9]{4}(?:\.[0-9]+)?|[A-Z0-9.-]+)/i)?.[1] || text.match(/\b(20[0-9]{2})\b/)?.[1] || null;
+  return { manufacturer, product: nfpa ? name.replace(/\.pdf$/i, "") : null, product_family: nfpa ? "NFPA 80" : null, document_type: documentType, document_date: version, version_label: version, topics: nfpa ? ["fire doors", "fire windows", "standards"] : [] };
+}
+
+function safeProcessingError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  if (/quota|rate limit|429|resource exhausted/.test(message)) return "TYK couldn't finish processing this document yet. I'm retrying with another available processing method.";
+  if (/timeout|abort|network|fetch failed/.test(message)) return "TYK couldn't reach a document processing service. The original file is preserved and can be retried.";
+  return "TYK couldn't finish processing this document right now. The original file is preserved and can be retried.";
+}
+
 async function processDocument(documentId) {
   const { data: doc, error: docError } = await supabase
     .from("documents")
-    .select("id, name, file_path, file_type, file_size, document_scope, audit_id, conversation_id")
+    .select("id, name, file_path, file_type, file_size, document_scope, audit_id, conversation_id, attempt_count")
     .eq("id", documentId)
     .single();
 
   if (docError || !doc) throw new Error("Document not found.");
 
+  const workerId = crypto.randomUUID();
   await supabase
     .from("documents")
-    .update({ status: "processing", error_message: null })
+    .update({ status: "processing", error_message: null, processing_started_at: new Date().toISOString(), processing_updated_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), attempt_count: (doc.attempt_count || 0) + 1, worker_id: workerId })
     .eq("id", documentId);
 
   const { data: file, error: downloadError } = await supabase.storage
@@ -307,7 +326,8 @@ async function processDocument(documentId) {
   // Auto-classify from the first couple pages - never blocks indexing.
   const sampleText = records.slice(0, 4).map((r) => r.content).join("\n")
     .slice(0, 4000);
-  const metadata = await classifyDocument(sampleText);
+  const deterministic = deterministicMetadata(doc.name, sampleText);
+  const metadata = { ...deterministic, ...(await classifyDocument(sampleText) || {}) };
   if (metadata) {
     await supabase
       .from("documents")
@@ -327,6 +347,10 @@ async function processDocument(documentId) {
         category: metadata.document_type || null,
         auto_metadata: metadata,
         version_label: metadata.document_date || null,
+        classification_confidence: metadata.document_type || metadata.manufacturer ? "medium" : "low",
+        classification_source: metadata.document_type || metadata.manufacturer ? "deterministic_and_ai" : "deterministic_filename_text",
+        document_subtype: metadata.document_type || null,
+        language: "en",
       })
       .eq("id", documentId);
   }
@@ -350,13 +374,23 @@ Deno.serve(async (req) => {
       const to = from + pageSize - 1;
       const search = (body.search || "").trim();
       let query = supabase.from("documents").select(
-        "id, name, description, file_type, file_size, category, manufacturer, product, product_family, document_type, topics, part_numbers, model_numbers, document_date, version_label, publication_date, effective_date, verification_status, last_verified_at, next_verification_at, document_family_id, duplicate_of, source_url, status, error_message, chunk_count, created_at, file_path",
+        "id, name, description, file_type, file_size, category, manufacturer, product, product_family, document_type, document_subtype, topics, part_numbers, model_numbers, document_date, version_label, publication_date, effective_date, verification_status, last_verified_at, next_verification_at, document_family_id, duplicate_of, classification_confidence, classification_source, source_url, status, error_message, chunk_count, created_at, file_path, heartbeat_at, processing_updated_at",
         { count: "exact" },
       ).order("created_at", { ascending: false }).range(from, to);
       query = query.neq("document_scope", "AUDIT_ONLY");
       if (search) query = query.or(`name.ilike.%${search}%,manufacturer.ilike.%${search}%,product.ilike.%${search}%,document_type.ilike.%${search}%`);
       const { data: pagedData, error: pagedError, count } = await query;
       const rows = pagedData || [];
+      const now = Date.now();
+      for (const document of rows) {
+        const stale = document.status === "processing" && (!document.heartbeat_at || now - new Date(document.heartbeat_at).getTime() > PROCESSING_TIMEOUT_MS);
+        if (!stale) continue;
+        await supabase.from("documents").update({ status: "queued", error_message: "Processing worker timed out; retrying.", processing_updated_at: new Date().toISOString() }).eq("id", document.id);
+        const retry = processDocument(document.id).catch(async (error) => {
+          await supabase.from("documents").update({ status: "error", error_message: safeProcessingError(error), processing_updated_at: new Date().toISOString() }).eq("id", document.id);
+        });
+        if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(retry);
+      }
 
       if (pagedError) return json({ error: pagedError.message }, 500);
       return json({ documents: rows.map((document) => ({
@@ -575,11 +609,31 @@ Deno.serve(async (req) => {
         const result = await processDocument(document_id);
         return json({ ok: true, ...result });
       } catch (err) {
+        const safeError = safeProcessingError(err);
         await supabase
           .from("documents")
-          .update({ status: "error", error_message: err.message })
+          .update({ status: "error", error_message: safeError, processing_updated_at: new Date().toISOString(), heartbeat_at: new Date().toISOString() })
           .eq("id", document_id);
-        return json({ error: err.message }, 500);
+        return json({ error: safeError }, 500);
+      }
+    }
+
+    if (action === "retry") {
+      if (!(await hasPermission(body, "can_upload_documents"))) return json({ error: "Forbidden" }, 403);
+      const { document_id } = body;
+      if (!document_id) return json({ error: "document_id is required" }, 400);
+      const { data: document } = await supabase.from("documents").select("id, status, heartbeat_at").eq("id", document_id).maybeSingle();
+      if (!document) return json({ error: "Document not found." }, 404);
+      const stale = document.status === "processing" && document.heartbeat_at && Date.now() - new Date(document.heartbeat_at).getTime() > PROCESSING_TIMEOUT_MS;
+      if (document.status !== "error" && document.status !== "processing" && !stale) return json({ error: "Document is not ready for retry." }, 409);
+      await supabase.from("documents").update({ status: "queued", error_message: null, processing_updated_at: new Date().toISOString() }).eq("id", document_id);
+      try {
+        const result = await processDocument(document_id);
+        return json({ ok: true, ...result });
+      } catch (err) {
+        const safeError = safeProcessingError(err);
+        await supabase.from("documents").update({ status: "error", error_message: safeError, processing_updated_at: new Date().toISOString() }).eq("id", document_id);
+        return json({ error: safeError }, 500);
       }
     }
 

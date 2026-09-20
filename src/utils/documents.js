@@ -57,6 +57,10 @@ export async function verifyDocument(documentId, identity) {
   return invokeDocumentManager({ action: "verify", document_id: documentId, ...ownerParams(identity) });
 }
 
+export async function retryDocument(documentId, identity) {
+  return invokeDocumentManager({ action: "retry", document_id: documentId, ...ownerParams(identity) });
+}
+
 export async function listDocumentVersions(documentId, identity) {
   return invokeDocumentManager({ action: "versions", document_id: documentId, ...ownerParams(identity) });
 }

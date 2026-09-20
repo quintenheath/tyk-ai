@@ -8,6 +8,7 @@ import {
   exportTykKnowledge,
   listDocuments,
   listDocumentVersions,
+  retryDocument,
   uploadDocument,
   verifyDocument,
 } from "../utils/documents";
@@ -24,6 +25,16 @@ function statusClass(status) {
   if (status === "indexed") return "doc-status doc-status-ok";
   if (status === "error") return "doc-status doc-status-error";
   return "doc-status doc-status-pending";
+}
+
+function safeDocumentError(message) {
+  if (!message) return "";
+  if (/quota|rate limit|429|resource exhausted|ai\.google\.dev|api key|billing/i.test(message)) {
+    return "TYK couldn't finish processing this document yet. I'm retrying with another available processing method.";
+  }
+  return /supabase|edge function|stack|http \d{3}/i.test(message)
+    ? "TYK couldn't finish processing this document right now. The original file is preserved and can be retried."
+    : message;
 }
 
 function DocumentsView({ identity }) {
@@ -142,6 +153,20 @@ function DocumentsView({ identity }) {
     }
   }
 
+  async function handleRetry(documentId) {
+    setExporting(`retry-${documentId}`);
+    setErrorText("");
+    try {
+      await retryDocument(documentId, identity);
+      await refresh();
+    } catch (err) {
+      console.error("Retry processing failed:", err);
+      setErrorText("TYK couldn't retry this document yet. The original file is preserved.");
+    } finally {
+      setExporting("");
+    }
+  }
+
   async function handleVersions(documentId) {
     try {
       const result = await listDocumentVersions(documentId, identity);
@@ -246,6 +271,9 @@ function DocumentsView({ identity }) {
                 {doc.duplicate_of && (
                   <span className="document-tag">Exact duplicate detected</span>
                 )}
+                {doc.classification_confidence && (
+                  <span className="document-tag">Classification: {doc.classification_confidence}</span>
+                )}
               </div>
               {doc.topics?.length > 0 && (
                 <div className="document-topics">
@@ -257,7 +285,7 @@ function DocumentsView({ identity }) {
                 </div>
               )}
               {doc.status === "error" && doc.error_message && (
-                <div className="document-error">{doc.error_message}</div>
+                <div className="document-error">{safeDocumentError(doc.error_message)}</div>
               )}
             </div>
 
@@ -277,6 +305,11 @@ function DocumentsView({ identity }) {
             {doc.source_url && (
               <button type="button" className="teach-skip-button" disabled={exporting !== ""} onClick={() => handleVerify(doc.id)}>
                 {exporting === `verify-${doc.id}` ? "Checking…" : "Verify now"}
+              </button>
+            )}
+            {(doc.status === "error" || doc.status === "duplicate") && doc.has_file && (
+              <button type="button" className="teach-skip-button" disabled={exporting !== ""} onClick={() => handleRetry(doc.id)}>
+                {exporting === `retry-${doc.id}` ? "Retrying…" : "Retry processing"}
               </button>
             )}
             <button type="button" className="teach-skip-button" onClick={() => handleVersions(doc.id)}>
