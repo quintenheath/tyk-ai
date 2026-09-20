@@ -81,6 +81,33 @@ function isInCooldown(health) {
   return new Date(health.cooldown_until).getTime() > Date.now();
 }
 
+async function syncArsenal(defs) {
+  try {
+    for (const def of defs) {
+      for (const model of def.models) {
+        const capabilities = def.capabilities || [];
+        await supabaseAdmin.from("ai_arsenal").upsert({
+          provider: def.name,
+          tool_name: `${def.name} ${model}`,
+          model,
+          capabilities,
+          input_types: capabilities.includes("vision") ? ["text", "image"] : ["text"],
+          output_types: ["text", "structured_json"],
+          vision: capabilities.includes("vision"),
+          active: true,
+          availability_status: "ACTIVE",
+          health_status: "UNKNOWN",
+          fallback_priority: def.paid ? 80 : 50,
+          last_checked: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "provider,model" });
+      }
+    }
+  } catch (error) {
+    console.error("AI Arsenal sync failed (ignored):", error);
+  }
+}
+
 async function recordSuccess(provider, model, latencyMs) {
   try {
     await supabaseAdmin.from("provider_health").upsert({
@@ -96,6 +123,8 @@ async function recordSuccess(provider, model, latencyMs) {
   } catch (err) {
     console.error(`Failed to record provider health for ${provider}:`, err);
   }
+  const { data: arsenal } = await supabaseAdmin.from("ai_arsenal").select("success_count").eq("provider", provider).eq("model", model).maybeSingle();
+  await supabaseAdmin.from("ai_arsenal").update({ health_status: "HEALTHY", last_tested: new Date().toISOString(), latency_ms: latencyMs, success_count: (arsenal?.success_count || 0) + 1 }).eq("provider", provider).eq("model", model);
 }
 
 async function recordFailure(provider, model, err, latencyMs, priorFailures) {
@@ -120,6 +149,8 @@ async function recordFailure(provider, model, err, latencyMs, priorFailures) {
   } catch (dbErr) {
     console.error(`Failed to record provider health for ${provider}:`, dbErr);
   }
+  const { data: arsenal } = await supabaseAdmin.from("ai_arsenal").select("failure_count").eq("provider", provider).eq("model", model).maybeSingle();
+  await supabaseAdmin.from("ai_arsenal").update({ health_status: errorType === "quota" ? "COOLDOWN" : "DEGRADED", cooldown_until: new Date(Date.now() + cooldownMs).toISOString(), last_tested: new Date().toISOString(), latency_ms: latencyMs, failure_count: (arsenal?.failure_count || 0) + 1 }).eq("provider", provider).eq("model", model);
 }
 
 // --- Provider adapters (all share the same shape: throw Error with
@@ -348,6 +379,7 @@ export async function generateAnswer(
   const defs = buildProviderDefs(needsVision).filter((d) =>
     d.capabilities.includes(needsVision ? "vision" : "text")
   );
+  await syncArsenal(defs);
   if (defs.length === 0) {
     throw new AiUnavailableError("No AI provider is configured.");
   }

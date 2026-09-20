@@ -22,6 +22,7 @@ function SettingsView({ identity }) {
   const [sources, setSources] = useState([]);
   const [pending, setPending] = useState([]);
   const [activeWork, setActiveWork] = useState([]);
+  const [arsenal, setArsenal] = useState([]);
   const [researchCount, setResearchCount] = useState(0);
   const [checkingProvider, setCheckingProvider] = useState(null);
   const [setupSource, setSetupSource] = useState(null);
@@ -45,8 +46,18 @@ function SettingsView({ identity }) {
 
     loadSources();
     if (canApprove) loadPending();
+    if (identity?.permissions?.can_view_research) loadArsenal();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadArsenal() {
+    try {
+      const { data, error } = await supabase.functions.invoke("background-research", { body: { action: "arsenal", token: identity?.token } });
+      if (!error && !data?.error) setArsenal(data.arsenal || []);
+    } catch (err) {
+      console.error("Failed to load AI Arsenal:", err);
+    }
+  }
 
   async function loadPending() {
     let items = [];
@@ -174,6 +185,25 @@ function SettingsView({ identity }) {
             )}
           </div>
         </>
+      )}
+
+      {identity?.permissions?.can_view_research && arsenal.length > 0 && (
+        <div className="teach-history">
+          <div className="teach-history-label">AI Arsenal</div>
+          {arsenal.map((tool) => (
+            <div className="document-row" key={`${tool.provider}-${tool.model}`}>
+              <div className="document-row-main">
+                <div className="document-name">{tool.provider} · {tool.model}</div>
+                <div className="document-meta">
+                  {(tool.capabilities || []).map((capability) => <span className="document-tag" key={capability}>{capability}</span>)}
+                  <span className="document-tag">{tool.health_status}</span>
+                  <span className="document-tag">fallback {tool.fallback_priority}</span>
+                </div>
+              </div>
+              <div className={tool.health_status === "HEALTHY" ? "doc-status doc-status-ok" : "doc-status doc-status-pending"}>{tool.availability_status}</div>
+            </div>
+          ))}
+        </div>
       )}
 
       <div className="teach-history">

@@ -79,6 +79,14 @@ const RESEARCH_VARIANTS = [
   "Research compatibility and related products for",
 ];
 
+const AI_DISCOVERY_TASKS = [
+  { topic: "Discover maintained free vision models for TYK", type: "AI_DISCOVERY", priority: 6 },
+  { topic: "Check configured AI provider model deprecations and limits", type: "AI_MODEL_UPDATE", priority: 7 },
+  { topic: "Review AI provider privacy and commercial-use terms", type: "AI_SECURITY_REVIEW", priority: 6 },
+  { topic: "Benchmark structured JSON extraction capability options", type: "AI_BENCHMARK", priority: 5 },
+  { topic: "Check AI provider health and fallback availability", type: "AI_PROVIDER_HEALTH", priority: 8 },
+];
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -152,6 +160,22 @@ async function ensureCodeTasks() {
       reason: "Core Ontario code/requirement coverage TYK must maintain.",
       priority: 8,
       source_type: source.sourceType,
+      status: "queued",
+    }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
+  }
+}
+
+async function ensureAiDiscoveryTasks() {
+  for (const task of AI_DISCOVERY_TASKS) {
+    await supabase.from("research_queue").upsert({
+      topic: task.topic,
+      title: task.topic,
+      description: "Evaluate official AI provider/model documentation before any production routing change; record capabilities, limits, privacy, and maintenance status.",
+      type: task.type,
+      reason: "Continuous AI Arsenal maintenance and capability discovery.",
+      priority: task.priority,
+      source_type: "official_documentation",
+      search_queries: [task.topic, `${task.topic} official documentation`, `${task.topic} API limits pricing privacy`],
       status: "queued",
     }, { onConflict: "topic,entity_id", ignoreDuplicates: true });
   }
@@ -795,6 +819,7 @@ async function runMaintenanceTask(task, budget) {
 
 async function runResearch(cycleDepth = 0) {
   await ensureCodeTasks();
+  await ensureAiDiscoveryTasks();
   await ensureResearchAreaTasks();
   await generateGapTasks();
   await ensureMinimumQueue();
@@ -962,6 +987,7 @@ Deno.serve(async (req) => {
       // This keeps the Pending Company Knowledge panel meaningful between
       // scheduled worker runs without researching or calling AI from the UI.
       await ensureCodeTasks();
+      await ensureAiDiscoveryTasks();
       await ensureResearchAreaTasks();
       await generateGapTasks();
       const replenished = await ensureMinimumQueue();
@@ -1004,6 +1030,13 @@ Deno.serve(async (req) => {
         .limit(100);
       if (error) return json({ error: error.message }, 500);
       return json({ log: data || [] });
+    }
+
+    if (body.action === "arsenal") {
+      if (!(await hasPermission(body, "can_view_research"))) return json({ error: "Forbidden" }, 403);
+      const { data, error } = await supabase.from("ai_arsenal").select("provider, tool_name, model, capabilities, health_status, availability_status, latency_ms, success_count, failure_count, cooldown_until, active, preferred, fallback_priority, last_checked, last_tested, privacy_status, commercial_use_status").order("fallback_priority", { ascending: true }).order("provider");
+      if (error) return json({ error: "Could not load AI Arsenal." }, 500);
+      return json({ arsenal: data || [] });
     }
 
     if (["prioritize", "pause", "stop", "start"].includes(body.action)) {
