@@ -258,6 +258,13 @@ Deno.serve(async (req) => {
       const { user_id, name, role, permissions, disabled } = body;
       if (!user_id) return json({ error: "user_id is required" }, 400);
 
+      const { data: target } = await supabase.from("app_users").select("id, role, disabled").eq("id", user_id).maybeSingle();
+      if (!target) return json({ error: "User not found" }, 404);
+      if (target.role === "admin" && (role === "office" || disabled === true)) {
+        const { count: adminCount } = await supabase.from("app_users").select("id", { count: "exact", head: true }).eq("role", "admin").eq("disabled", false);
+        if ((adminCount || 0) <= 1) return json({ error: "The last active admin cannot be disabled or demoted." }, 409);
+      }
+
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
       if (name?.trim()) updates.name = name.trim();
       if (role) {
@@ -278,6 +285,21 @@ Deno.serve(async (req) => {
 
       if (error) return json({ error: error.message }, 500);
       return json({ user: data });
+    }
+
+    if (action === "delete-user") {
+      if (!(await requireAdmin(body))) return json({ error: "Forbidden" }, 403);
+      const { user_id } = body;
+      if (!user_id) return json({ error: "user_id is required" }, 400);
+      const { data: target } = await supabase.from("app_users").select("id, role, disabled").eq("id", user_id).maybeSingle();
+      if (!target) return json({ error: "User not found" }, 404);
+      if (target.role === "admin") {
+        const { count: adminCount } = await supabase.from("app_users").select("id", { count: "exact", head: true }).eq("role", "admin").eq("disabled", false);
+        if ((adminCount || 0) <= 1) return json({ error: "The last active admin cannot be deleted." }, 409);
+      }
+      const { error } = await supabase.from("app_users").delete().eq("id", user_id);
+      if (error) return json({ error: "Could not delete user." }, 500);
+      return json({ ok: true });
     }
 
     if (action === "reset-password") {

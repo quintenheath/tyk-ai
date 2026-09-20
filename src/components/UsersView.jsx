@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   createUser,
+  deleteUser,
   listRoleDefaults,
   listUsers,
   resetPassword,
@@ -99,6 +100,16 @@ function UsersView({ identity }) {
       refresh();
     } catch (err) {
       setErrorText(err.message || "Failed to update user.");
+    }
+  }
+
+  async function handleDeleteUser(user) {
+    if (!window.confirm(`Delete ${user.name}?`)) return;
+    try {
+      await deleteUser(identity, user.id);
+      refresh();
+    } catch (err) {
+      setErrorText(err.message || "Failed to delete user.");
     }
   }
 
@@ -245,6 +256,9 @@ function UsersView({ identity }) {
                 onClick={() => handleToggleDisabled(user)}
               >
                 {user.disabled ? "Enable" : "Disable"}
+              </button>
+              <button type="button" className="teach-skip-button" onClick={() => handleDeleteUser(user)}>
+                Delete
               </button>
             </div>
 

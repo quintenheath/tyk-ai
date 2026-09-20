@@ -114,6 +114,15 @@ export async function resetPassword(identity, userId, password) {
   });
 }
 
+export async function deleteUser(identity, userId) {
+  const { data, error } = await supabase.functions.invoke("auth-users", {
+    body: { action: "delete-user", user_id: userId, token: identity?.token },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
 export async function listRoleDefaults(identity) {
   const { defaults } = await invokeAuth({
     action: "list-role-defaults",
