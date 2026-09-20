@@ -20,6 +20,7 @@ function CallOverlay({
   const [errorText, setErrorText] = useState("");
 
   const recognitionRef = useRef(null);
+  const streamRef = useRef(null);
   const recognitionConstructorRef = useRef(null);
   const conversationIdRef = useRef(conversationId);
   const messagesRef = useRef(messages);
@@ -74,12 +75,19 @@ function CallOverlay({
     }
   }
 
+  function stopMedia() {
+    const stream = streamRef.current;
+    streamRef.current = null;
+    stream?.getTracks().forEach((track) => track.stop());
+  }
+
   function shutdownCall() {
     callActiveRef.current = false;
     sessionIdRef.current += 1;
     if (mountedRef.current) setActive(false);
     window.speechSynthesis?.cancel();
     stopRecognition();
+    stopMedia();
   }
 
   async function handleTurn(transcript, sessionId) {
@@ -154,12 +162,25 @@ function CallOverlay({
     window.speechSynthesis.speak(utterance);
   }
 
-  function startCall() {
+  async function startCall() {
     if (callActiveRef.current) return;
     const sessionId = sessionIdRef.current + 1;
     sessionIdRef.current = sessionId;
     callActiveRef.current = true;
     setActive(true);
+    setStatus("Requesting microphone…");
+    try {
+      streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (error) {
+      console.error("Microphone access failed:", error);
+      setErrorText("Microphone access is required for Call.");
+      shutdownCall();
+      return;
+    }
+    if (!callActiveRef.current || sessionId !== sessionIdRef.current) {
+      shutdownCall();
+      return;
+    }
     setStatus("Listening…");
     const SpeechRecognition = recognitionConstructorRef.current;
     if (!SpeechRecognition) {

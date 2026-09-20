@@ -70,7 +70,7 @@ function FaceTimeOverlay({
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
-        audio: false,
+        audio: true,
       });
 
       if (!mountedRef.current || !callActiveRef.current || sessionId !== sessionIdRef.current) {
@@ -93,7 +93,7 @@ function FaceTimeOverlay({
       if (!mountedRef.current || !callActiveRef.current || sessionId !== sessionIdRef.current) return false;
       console.error("Camera access failed:", err);
       setCameraError(
-        "Couldn't access the camera. Please allow camera permissions.",
+        "Camera and microphone access is required for FaceTime.",
       );
       return false;
     }
