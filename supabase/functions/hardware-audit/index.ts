@@ -176,6 +176,8 @@ async function buildFindings(parsed, documentId) {
 
 async function runAudit(auditId, documentId) {
   const { data: audit } = await supabase.from("hardware_audits").select("conversation_id, project_name").eq("id", auditId).single();
+  await supabase.from("documents").update({ document_scope: "AUDIT_ONLY", audit_id: auditId, conversation_id: audit?.conversation_id || null }).eq("id", documentId);
+  await supabase.from("document_chunks").update({ document_scope: "AUDIT_ONLY", audit_id: auditId, conversation_id: audit?.conversation_id || null }).eq("document_id", documentId);
   await appendAuditMessage(audit?.conversation_id, "I'm reviewing the hardware schedule now.", { auditId, auditStatus: "analyzing", auditStage: "Extracting schedule" });
   const [text, chunks] = await loadAuditText(documentId);
   await appendAuditMessage(audit?.conversation_id, "The schedule is readable. I’m extracting openings and hardware items.", { auditId, auditStatus: "analyzing", auditStage: "Extracting openings and hardware" });
@@ -225,6 +227,8 @@ Deno.serve(async (req) => {
       await supabase.from("messages").insert({ conversation_id: conversation.id, role: "user", content: `Hardware Schedule Audit: ${projectName}`, metadata: { audit: true, attachments: [body.document_name || projectName] } });
       const { data: audit, error } = await supabase.from("hardware_audits").insert({ document_id: body.document_id, conversation_id: conversation.id, project_name: projectName, ...owner }).select().single();
       if (error) return json({ error: error.message }, 500);
+      await supabase.from("documents").update({ document_scope: "AUDIT_ONLY", audit_id: audit.id, conversation_id: conversation.id }).eq("id", body.document_id);
+      await supabase.from("document_chunks").update({ document_scope: "AUDIT_ONLY", audit_id: audit.id, conversation_id: conversation.id }).eq("document_id", body.document_id);
       await appendAuditMessage(conversation.id, "I've got the hardware schedule. I'm reviewing it now.", { auditId: audit.id, auditStatus: "analyzing", auditStage: "Schedule received", documentId: body.document_id });
       const work = runAudit(audit.id, body.document_id).catch(async () => {
         await supabase.from("hardware_audits").update({ status: "error", summary: { error: "Audit extraction failed." } }).eq("id", audit.id);
@@ -258,7 +262,10 @@ Deno.serve(async (req) => {
     }
 
     if (body.action === "export-report") {
-      const { data: audit, error } = await supabase.from("hardware_audits").select("*").eq("id", body.audit_id).single();
+      const identity = await loadIdentity(body);
+      if (!identity) return json({ error: "A valid session token is required" }, 401);
+      const ownerColumnName = identity.type === "user" ? "user_id" : "session_id";
+      const { data: audit, error } = await supabase.from("hardware_audits").select("*").eq("id", body.audit_id).eq(ownerColumnName, identity.id).single();
       if (error || !audit) return json({ error: "Audit not found" }, 404);
       const { data: findings } = await supabase.from("hardware_audit_findings").select("*").eq("audit_id", body.audit_id).order("severity");
       const bytes = await createReportPdf(audit, findings || []);

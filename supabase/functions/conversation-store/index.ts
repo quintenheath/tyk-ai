@@ -66,6 +66,7 @@ async function maybeUpdateConversationMetadata(conversationId, metadata) {
       ...(suggestion.topicSummary
         ? { topic_summary: suggestion.topicSummary.trim() }
         : {}),
+      ...(suggestion.activeEntity ? { active_entity: suggestion.activeEntity.trim() } : {}),
     })
     .eq("id", conversationId);
 }

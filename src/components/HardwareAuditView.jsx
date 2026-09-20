@@ -39,7 +39,7 @@ function HardwareAuditView({ identity, onOpenConversation }) {
     setUploading(true);
     setErrorText("");
     try {
-      const document = await uploadDocument(file, identity);
+      const document = await uploadDocument(file, identity, { documentScope: "AUDIT_ONLY" });
       const { audit, conversation } = await invokeAudit({
         action: "create",
         document_id: document.id,

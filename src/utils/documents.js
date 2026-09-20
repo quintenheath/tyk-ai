@@ -65,13 +65,16 @@ export async function listDocumentVersions(documentId, identity) {
 // server-side processing (extract -> chunk -> embed -> auto-classify).
 // TYK determines manufacturer/product/document type itself; the user never
 // has to categorize anything.
-export async function uploadDocument(file, identity, { description } = {}) {
+export async function uploadDocument(file, identity, { description, documentScope, auditId, conversationId } = {}) {
   const { document, uploadUrl } = await invokeDocumentManager({
     action: "request-upload",
     name: file.name,
     fileType: file.type,
     fileSize: file.size,
     description: description || null,
+    document_scope: documentScope || "COMPANY",
+    audit_id: auditId || null,
+    conversation_id: conversationId || null,
     ...ownerParams(identity),
   });
 

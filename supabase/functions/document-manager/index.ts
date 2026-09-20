@@ -87,8 +87,8 @@ async function signedExport(bytes, fileName, contentType) {
 
 async function loadKnowledgeExport() {
   const [documents, chunks, sources, entities, facts, learned, queue, log, conflicts, visual] = await Promise.all([
-    supabase.from("documents").select("*").order("created_at", { ascending: true }),
-    supabase.from("document_chunks").select("*").order("document_id", { ascending: true }).order("chunk_index", { ascending: true }),
+    supabase.from("documents").select("*").neq("document_scope", "AUDIT_ONLY").order("created_at", { ascending: true }),
+    supabase.from("document_chunks").select("*").neq("document_scope", "AUDIT_ONLY").order("document_id", { ascending: true }).order("chunk_index", { ascending: true }),
     supabase.from("web_sources").select("*").order("retrieved_at", { ascending: true }),
     supabase.from("knowledge_entities").select("*"),
     supabase.from("knowledge_facts").select("*"),
@@ -181,7 +181,7 @@ ${sampleText}`;
 async function processDocument(documentId) {
   const { data: doc, error: docError } = await supabase
     .from("documents")
-    .select("id, name, file_path, file_type, file_size")
+    .select("id, name, file_path, file_type, file_size, document_scope, audit_id, conversation_id")
     .eq("id", documentId)
     .single();
 
@@ -266,6 +266,9 @@ async function processDocument(documentId) {
     page_number: record.pageNumber,
     content: record.content,
     embedding: embeddings[index],
+    document_scope: doc.document_scope || "COMPANY",
+    audit_id: doc.audit_id || null,
+    conversation_id: doc.conversation_id || null,
   }));
 
   // Insert in batches to stay well under request size limits.
@@ -331,6 +334,7 @@ Deno.serve(async (req) => {
         "id, name, description, file_type, file_size, category, manufacturer, product, product_family, document_type, topics, part_numbers, model_numbers, document_date, version_label, publication_date, effective_date, verification_status, last_verified_at, next_verification_at, document_family_id, duplicate_of, source_url, status, error_message, chunk_count, created_at, file_path",
         { count: "exact" },
       ).order("created_at", { ascending: false }).range(from, to);
+      query = query.neq("document_scope", "AUDIT_ONLY");
       if (search) query = query.or(`name.ilike.%${search}%,manufacturer.ilike.%${search}%,product.ilike.%${search}%,document_type.ilike.%${search}%`);
       const { data: pagedData, error: pagedError, count } = await query;
       const rows = pagedData || [];
@@ -401,6 +405,7 @@ Deno.serve(async (req) => {
       const { data, error } = await supabase
         .from("documents")
         .select("id, name, manufacturer, product, document_type")
+        .neq("document_scope", "AUDIT_ONLY")
         .or(
           `name.ilike.%${query}%,manufacturer.ilike.%${query}%,product.ilike.%${query}%,document_type.ilike.%${query}%`,
         )
@@ -515,6 +520,9 @@ Deno.serve(async (req) => {
           file_type: fileType || null,
           file_size: fileSize || null,
           status: "uploading",
+          document_scope: body.document_scope || "COMPANY",
+          audit_id: body.audit_id || null,
+          conversation_id: body.conversation_id || null,
         })
         .select()
         .single();

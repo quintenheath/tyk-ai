@@ -79,6 +79,7 @@ async function searchKnowledge(embedding) {
     const { data, error } = await supabaseAdmin.rpc("match_document_chunks", {
       query_embedding: embedding,
       match_count: MAX_KNOWLEDGE_CHUNKS,
+      include_audit_documents: false,
     });
     if (error) throw error;
     if (!data?.length) return [];
@@ -92,7 +93,7 @@ async function searchKnowledge(embedding) {
       (docs || []).map((d) => [d.id, d.name]),
     );
 
-    return data.map((row) => ({
+    return data.filter((row) => Number(row.similarity || 0) >= 0.55).map((row) => ({
       documentId: row.document_id,
       documentName: nameById[row.document_id] || "Unknown document",
       page: row.page_number,
@@ -103,6 +104,10 @@ async function searchKnowledge(embedding) {
     console.error("Knowledge search failed (continuing without it):", err);
     return [];
   }
+}
+
+function isKnowledgeCheck(question) {
+  return /^(?:do you know anything about|do you know about|are you familiar with|do you know much about|have you heard of)\s+.+[?!.]?$/i.test(question.trim());
 }
 
 // Pulls the full extracted text of explicitly attached documents (e.g. a
@@ -439,7 +444,24 @@ Deno.serve(async (req) => {
 
     const startedAt = Date.now();
     const normalizedQuestion = normalizeQuestion(question);
-    const researchQuestion = contextualResearchQuestion(question, history);
+    const contextualQuestion = contextualResearchQuestion(question, history);
+    const researchQuestion = contextualQuestion;
+
+    if (isKnowledgeCheck(question)) {
+      const subject = question.trim().replace(/^(?:do you know anything about|do you know about|are you familiar with|do you know much about|have you heard of)\s+/i, "").replace(/[?!.]+$/, "").trim();
+      const hasPriorContext = history.some((turn) => turn.role === "user" || turn.role === "assistant");
+      return new Response(JSON.stringify({
+        success: true,
+        answer: hasPriorContext
+          ? "Yeah, I can help with that. What are you having trouble with?"
+          : `Yeah, I know a bit about ${subject}. What do you want to know?`,
+        sources: [],
+        aiRequired: false,
+        needsWebResearch: false,
+        researchReason: "Knowledge-check intent answered without retrieval or research.",
+        conversationMeta: { topicSummary: `Conversation about ${subject}.`, activeEntity: subject, intent: "KNOWLEDGE_CHECK" },
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
     if (isNonSubstantiveInput(question)) {
       const hasContext = history?.some((turn) => turn.role === "user" || turn.role === "assistant");
@@ -519,7 +541,7 @@ Deno.serve(async (req) => {
     // instead of embedding the same question twice.
     let questionEmbedding = null;
     try {
-      questionEmbedding = await embedText(normalizedQuestion);
+      questionEmbedding = await embedText(contextualQuestion);
     } catch (err) {
       console.error("Embedding failed (continuing without it):", err);
     }
