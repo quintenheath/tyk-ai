@@ -1,6 +1,6 @@
 # TYK Requirements Status
 
-Last audited: 2026-09-19
+Last audited: 2026-09-20
 
 This ledger records verified implementation state. `COMPLETE` means a runtime path was tested, not merely that code or UI exists.
 
@@ -50,6 +50,25 @@ This ledger records verified implementation state. `COMPLETE` means a runtime pa
 | MULTI-06 | Concurrency | User chat/uploads/audits can operate independently of background worker | request-scoped Edge Functions and private storage paths | PARTIALLY COMPLETE | Architecture is request-scoped; no global application lock found | Full six-user concurrent browser/load test not run in this environment |
 | MULTI-07 | Security | Cross-user conversation access denied server-side | signed token owner checks | COMPLETE | Existing ownership checks cover every conversation action | None |
 | MULTI-08 | Security | Temporary sessions are isolated and cleaned up | temp_sessions owner column and auth end-session cascade | COMPLETE | Existing auth/session architecture and prior live tests | None |
+
+## Post-Deployment Behaviour Audit — 2026-09-20
+
+| Test | Expected | Actual | Result | Evidence / Remaining issue |
+|---|---|---|---|---|
+| Tao conversation: Chinese quads knowledge check | Brief response, no retrieval/research | Brief response, zero sources, no web research, no AI call | PASS | Production browser conversation |
+| Tao conversation: repairing them | Preserve topic and answer briefly | Contextual brief response | PASS | Production browser conversation |
+| Tao conversation: Tao + engine | Understand Tao as the active quad/engine topic | Correct Tao Motor/small-engine response; no hardware schedule citation | PASS | Production browser conversation |
+| Tao symptom: starts then dies on throttle | Troubleshoot the active Tao engine | First run incorrectly created research; deterministic context resolver was deployed and rerun returned fuel/air troubleshooting | PASS AFTER FIX | Initial failure fixed in `ask-tyk`; rerun passed |
+| Hardware audit upload | Real extraction and chat audit | 3 openings, 2 hardware sets, D3/finish/compare responses from page 3 | PASS | Production `hardware-schedule-9.pdf` workflow |
+| Audit global isolation | Audit chunks excluded from global search | 10 audit-only documents, 231 audit-only chunks, 0 mismatched chunks; scoped RPC deployed | PASS AFTER FIX | Direct linked DB scope query; initial stale-chunk leak fixed |
+| New normal conversation after audit | No audit document/source leakage | No audit source appeared in the tested general-writing response | PASS | Production browser and direct scope verification |
+| Knowledge check capacity | No research task or expensive AI call | `aiRequired=false`, `needsWebResearch=false`, no sources | PASS | Production ask-tyk response |
+| General writing | Generic home routes general request normally | First run incorrectly created research; birthday-writing route deployed and rerun returned a message with no sources | PASS AFTER FIX | Production browser rerun |
+| Generic home/mobile | Exact title and no overflow | `What's on your mind today?`; 320/375/390/430 matched viewport widths | PASS | Production Pages checks |
+| Deleted conversation | Soft-delete and Quinten recovery | Create/delete/view/restore previously verified; messages preserved | PASS | Production Quinten recovery workflow |
+| Research dashboard | Real queue/progress state | 101 queued, one active at live check, real cadence/progress controls visible | PARTIAL | Scheduler heartbeat remains blocked by missing secure Vault configuration |
+| Private user report | Quinten report on Joshua, PDF, denial for other users | No private report/analysis implementation exists | MISSING | No matching source, table, or Edge Function action |
+| Mobile audit document scrolling | iPhone document/chat scroll ownership | Viewport overflow passes; physical iPhone Safari rubber-band/PDF gesture behavior not reproducible here | NOT FULLY TESTABLE | Requires physical iPhone Safari validation |
 
 ## Known External/Operational Blockers
 

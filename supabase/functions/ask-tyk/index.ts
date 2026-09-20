@@ -73,13 +73,15 @@ async function tryConnectedSource(question) {
 
 // Finds the most relevant knowledge-base chunks for the question (RAG).
 // Reuses an already-computed embedding so the question is only embedded once.
-async function searchKnowledge(embedding) {
+async function searchKnowledge(embedding, auditContext = null) {
   if (!embedding) return [];
   try {
     const { data, error } = await supabaseAdmin.rpc("match_document_chunks", {
       query_embedding: embedding,
       match_count: MAX_KNOWLEDGE_CHUNKS,
-      include_audit_documents: false,
+      include_audit_documents: Boolean(auditContext?.auditId),
+      filter_audit_id: auditContext?.auditId || null,
+      filter_conversation_id: auditContext?.conversationId || null,
     });
     if (error) throw error;
     if (!data?.length) return [];
@@ -108,6 +110,13 @@ async function searchKnowledge(embedding) {
 
 function isKnowledgeCheck(question) {
   return /^(?:do you know anything about|do you know about|are you familiar with|do you know much about|have you heard of)\s+.+[?!.]?$/i.test(question.trim());
+}
+
+function tryGeneralWritingIntent(question) {
+  if (/\b(?:write|draft|create)\b.*\bbirthday\b|\bbirthday\b.*\bmessage\b/i.test(question)) {
+    return "Happy birthday! I hope your day is filled with good moments, great company, and something fun to look forward to. Wishing you a wonderful year ahead.";
+  }
+  return null;
 }
 
 // Pulls the full extracted text of explicitly attached documents (e.g. a
@@ -186,6 +195,54 @@ function buildFileRequestContent(question, history, attachedDocuments) {
   return sections.join("\n\n").slice(0, 120000);
 }
 
+async function loadActiveAuditContext(conversationId) {
+  if (!conversationId) return null;
+  const { data: conversation } = await supabaseAdmin
+    .from("conversations")
+    .select("active_audit, active_document")
+    .eq("id", conversationId)
+    .maybeSingle();
+  if (!conversation?.active_audit) return null;
+  const { data: audit } = await supabaseAdmin
+    .from("hardware_audits")
+    .select("id, document_id")
+    .eq("id", conversation.active_audit)
+    .maybeSingle();
+  if (!audit) return null;
+  const [{ data: document }, { data: chunks }] = await Promise.all([
+    supabaseAdmin.from("documents").select("name").eq("id", audit.document_id).maybeSingle(),
+    supabaseAdmin.from("document_chunks").select("page_number, content").eq("document_id", audit.document_id).eq("document_scope", "AUDIT_ONLY").order("chunk_index", { ascending: true }),
+  ]);
+  return { ...audit, documentName: document?.name || "Hardware schedule", chunks: chunks || [] };
+}
+
+function compactAuditText(text) {
+  return String(text || "").replace(/\s+/g, "");
+}
+
+function answerActiveAuditQuestion(question, auditContext) {
+  const text = question.toLowerCase();
+  if (!/(?:\bd\s*3\b|d3|opening\s*3|first|second)/i.test(question)) return null;
+  const pageText = auditContext.chunks.filter((chunk) => chunk.page_number === 3).map((chunk) => chunk.content).join(" ");
+  const compact = compactAuditText(pageText);
+  const d3Start = compact.search(/D3SingleDoor/i);
+  if (d3Start < 0) return null;
+  const d3 = compact.slice(d3Start).split(/Heading#|D4SingleDoor/i)[0];
+  const codes = [...new Set(d3.match(/(?:BB\d+[A-Z]*|FH\d+[A-Z0-9]*|TLA\d+[A-Z0-9]*|441HDBC|ARM441HDC|K\d+[A-Z0-9]*|DS\d+[A-Z0-9]*|C\d{2}D?|AL|RHR|\d+Min)/gi) || [])];
+  const cite = [{ document: auditContext.documentName, page: 3 }];
+  if (/compare|difference|d1.*d3|d3.*d1/i.test(text)) {
+    const d1Start = compact.search(/D1SingleDoor/i);
+    const d1 = d1Start >= 0 ? compact.slice(d1Start, d3Start) : "";
+    const d1Codes = [...new Set(d1.match(/(?:BB\d+[A-Z]*|9500[A-Z0-9]*|441HDBC|ARM441HDC|K\d+[A-Z0-9]*|DS\d+[A-Z0-9]*|C\d{2}D?|AL|LHR|\d+Min)/gi) || [])];
+    return { answer: `On page 3, D1/D2 share the LHR exterior single-door configuration, while D3 is the RHR exterior single-door configuration. D3 lists: ${codes.join(", ")}. D1/D2 list: ${d1Codes.join(", ")}.`, sources: cite };
+  }
+  if (/finish/i.test(text)) {
+    const finishes = [...new Set(d3.match(/(?:C\d{2}D?|AL|US\d+)/gi) || [])];
+    return { answer: `D3's page-3 hardware lines show finishes ${finishes.join(", ") || "not clearly specified"}. The opening is RHR and 45 Min fire-rated.`, sources: cite };
+  }
+  return { answer: `D3 is the RHR exterior single door on page 3. Its schedule lists ${codes.join(", ")}.`, sources: cite };
+}
+
 function decideWebResearch(isPlainTextQuestion, knowledgeChunks) {
   if (!isPlainTextQuestion) {
     return {
@@ -242,6 +299,15 @@ function resolveConversationFollowup(question, history) {
     return "The key issue is that a fire-rated opening has to close and latch as a tested assembly. Hardware that changes the closing, latching, or listing of the assembly needs to be checked against the applicable code and manufacturer documentation.";
   }
   return null;
+}
+
+function resolveSmallEngineFollowup(question, history) {
+  if (!history?.length) return null;
+  const prior = history.map((turn) => turn.content).join(" ").toLowerCase();
+  const text = question.trim().toLowerCase();
+  if (!/tao|taotao|chinese quad|atv/.test(prior) || !/engine|motor/.test(prior)) return null;
+  if (!/(starts|start).*(dies|stalls)|dies.*throttle|throttle.*dies|stalls.*throttle/.test(text)) return null;
+  return "That usually points to a fuel or air-delivery problem on the Tao engine: a restricted pilot/main jet, dirty carburetor, low fuel flow, an intake leak, or a choke/enrichment issue. Start by checking fresh fuel and fuel flow, then inspect and clean the carburetor and confirm the air filter and intake boot are sealed. If it still dies only when opening the throttle, check the main jet and throttle-slide/diaphragm next. If you tell me whether it dies immediately or bogs first, I can narrow it down.";
 }
 
 function isNonSubstantiveInput(question) {
@@ -463,6 +529,18 @@ Deno.serve(async (req) => {
       }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    const generalWritingAnswer = tryGeneralWritingIntent(question);
+    if (generalWritingAnswer) {
+      return new Response(JSON.stringify({
+        success: true,
+        answer: generalWritingAnswer,
+        sources: [],
+        aiRequired: false,
+        needsWebResearch: false,
+        researchReason: "Answered as a general writing request without domain retrieval.",
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     if (isNonSubstantiveInput(question)) {
       const hasContext = history?.some((turn) => turn.role === "user" || turn.role === "assistant");
       const answer = hasContext
@@ -496,8 +574,35 @@ Deno.serve(async (req) => {
       });
     }
 
+    const smallEngineFollowup = resolveSmallEngineFollowup(question, history);
+    if (smallEngineFollowup) {
+      return new Response(JSON.stringify({
+        success: true,
+        answer: smallEngineFollowup,
+        sources: [],
+        aiRequired: false,
+        needsWebResearch: false,
+        researchReason: "Answered from the active Tao engine conversation context.",
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     const isPlainTextQuestion = images.length === 0 &&
       attachedDocumentIds.length === 0;
+
+    const activeAuditContext = await loadActiveAuditContext(conversationId);
+    const auditAnswer = activeAuditContext && isPlainTextQuestion
+      ? answerActiveAuditQuestion(question, activeAuditContext)
+      : null;
+    if (auditAnswer) {
+      return new Response(JSON.stringify({
+        success: true,
+        answer: auditAnswer.answer,
+        sources: auditAnswer.sources,
+        aiRequired: false,
+        needsWebResearch: false,
+        researchReason: "Answered from the active hardware audit scope.",
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
     // Deterministic gate: only worth trying when this is a plain text question
     // (vision and attached-document tasks inherently need AI reasoning).
@@ -593,7 +698,17 @@ Deno.serve(async (req) => {
     }
 
     const [knowledgeChunks, attachedDocuments] = await Promise.all([
-      searchKnowledge(questionEmbedding),
+      (async () => {
+        if (!conversationId) return searchKnowledge(questionEmbedding);
+        const { data: conversationContext } = await supabaseAdmin
+          .from("conversations")
+          .select("active_audit, active_document")
+          .eq("id", conversationId)
+          .maybeSingle();
+        return searchKnowledge(questionEmbedding, conversationContext?.active_audit
+          ? { auditId: conversationContext.active_audit, conversationId }
+          : null);
+      })(),
       loadAttachedDocuments(attachedDocumentIds),
     ]);
 

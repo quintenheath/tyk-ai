@@ -258,6 +258,11 @@ async function processDocument(documentId) {
     throw new Error("No extractable text was found in this document.");
   }
 
+  const { data: currentScope } = await supabase
+    .from("documents")
+    .select("document_scope, audit_id, conversation_id")
+    .eq("id", documentId)
+    .single();
   const embeddings = await embedTexts(records.map((r) => r.content));
 
   const rows = records.map((record, index) => ({
@@ -266,9 +271,9 @@ async function processDocument(documentId) {
     page_number: record.pageNumber,
     content: record.content,
     embedding: embeddings[index],
-    document_scope: doc.document_scope || "COMPANY",
-    audit_id: doc.audit_id || null,
-    conversation_id: doc.conversation_id || null,
+    document_scope: currentScope?.document_scope || doc.document_scope || "COMPANY",
+    audit_id: currentScope?.audit_id || doc.audit_id || null,
+    conversation_id: currentScope?.conversation_id || doc.conversation_id || null,
   }));
 
   // Insert in batches to stay well under request size limits.

@@ -229,6 +229,7 @@ Deno.serve(async (req) => {
       if (error) return json({ error: error.message }, 500);
       await supabase.from("documents").update({ document_scope: "AUDIT_ONLY", audit_id: audit.id, conversation_id: conversation.id }).eq("id", body.document_id);
       await supabase.from("document_chunks").update({ document_scope: "AUDIT_ONLY", audit_id: audit.id, conversation_id: conversation.id }).eq("document_id", body.document_id);
+      await supabase.from("conversations").update({ active_audit: audit.id, active_document: body.document_id }).eq("id", conversation.id);
       await appendAuditMessage(conversation.id, "I've got the hardware schedule. I'm reviewing it now.", { auditId: audit.id, auditStatus: "analyzing", auditStage: "Schedule received", documentId: body.document_id });
       const work = runAudit(audit.id, body.document_id).catch(async () => {
         await supabase.from("hardware_audits").update({ status: "error", summary: { error: "Audit extraction failed." } }).eq("id", audit.id);
