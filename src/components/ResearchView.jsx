@@ -14,6 +14,28 @@ const STATUS_LABELS = {
 
 const ACTIVE_STATUSES = new Set(["queued", "researching", "reverify", "needs_review"]);
 
+function formatTime(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+function formatElapsed(value, now) {
+  if (!value) return "—";
+  const elapsedSeconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+  return hours ? `${hours}h ${minutes}m` : `${minutes}m ${seconds}s`;
+}
+
+function readAccordionState(key) {
+  try {
+    return sessionStorage.getItem(key) === "open";
+  } catch {
+    return false;
+  }
+}
+
 function statusClass(status) {
   if (status === "done") return "doc-status doc-status-ok";
   if (status === "failed") return "doc-status doc-status-error";
@@ -38,6 +60,26 @@ function ResearchView({ identity }) {
   const [running, setRunning] = useState(false);
   const [errorText, setErrorText] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(() => readAccordionState("tyk-research-queue"));
+  const [historyOpen, setHistoryOpen] = useState(() => readAccordionState("tyk-research-history"));
+  const [now, setNow] = useState(() => Date.now());
+
+  const activeTask = queue.find((task) => task.status === "researching") || null;
+  const queuedTasks = queue.filter((task) => ACTIVE_STATUSES.has(task.status) && task.status !== "researching");
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  function toggleAccordion(key, setter, open) {
+    setter(!open);
+    try {
+      sessionStorage.setItem(key, open ? "closed" : "open");
+    } catch {
+      // Session persistence is an enhancement, not a requirement for the view.
+    }
+  }
 
   useEffect(() => {
     refresh();
@@ -134,73 +176,76 @@ function ResearchView({ identity }) {
         </div>
       )}
 
-      <div className="documents-upload">
-        <button type="button" className="upload-button" onClick={handleRunNow} disabled={running}>
-          {running ? "Running…" : "Run research now"}
-        </button>
-        <button type="button" className="teach-skip-button" onClick={handleExportKnowledge} disabled={exporting}>
-          {exporting ? "Preparing…" : "Export TYK Knowledge"}
-        </button>
-      </div>
-
       {loading && <div className="documents-empty">Loading…</div>}
 
-      {health && (
-        <div className="stats-grid">
-          <div className="stats-card">
-            <div className="stats-value">{health.documentsIndexed}</div>
-            <div className="stats-label">Documents indexed</div>
-          </div>
-          <div className="stats-card">
-            <div className="stats-value">{health.researchQueue.queued}</div>
-            <div className="stats-label">Tasks queued</div>
-          </div>
-          <div className="stats-card">
-            <div className="stats-value">
-              {health.aiProviders.filter((p) => p.status === "ok").length}/{health.aiProviders.length || 0}
+      {loadedSuccessfully && <>
+        <section className="research-current-section">
+          <div className="research-section-heading">
+            <div>
+              <div className="teach-history-label">Currently researching</div>
+              <p className="research-section-subtitle">What TYK is working on right now.</p>
             </div>
-            <div className="stats-label">AI providers healthy</div>
-          </div>
-          <div className="stats-card">
-            <div className="stats-value">{health.documentStorage === "ok" ? "OK" : "?"}</div>
-            <div className="stats-label">Document storage</div>
-          </div>
-          <div className="stats-card">
-            <div className="stats-value">{health.researchQueue.researching || 0}</div>
-            <div className="stats-label">Researching now</div>
-          </div>
-          <div className="stats-card">
-            <div className="stats-value">{health.researchQueue.completedToday || 0}</div>
-            <div className="stats-label">Completed today</div>
-          </div>
-          <div className="stats-card">
-            <div className="stats-value">{health.cadence?.label || "Server scheduled"}</div>
-            <div className="stats-label">
-              Next cycle {health.cadence?.nextRunAt ? new Date(health.cadence.nextRunAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "scheduled"}
+            <div className="research-current-actions">
+              <button type="button" className="upload-button" onClick={handleRunNow} disabled={running}>
+                {running ? "Running…" : "Run research now"}
+              </button>
+              <button type="button" className="teach-skip-button" onClick={handleExportKnowledge} disabled={exporting}>
+                {exporting ? "Preparing…" : "Export TYK Knowledge"}
+              </button>
             </div>
           </div>
-        </div>
-      )}
 
-      {loadedSuccessfully && <div className="teach-history">
-        <div className="teach-history-label">Currently researching</div>
-        {queue.filter((task) => task.status === "researching").map((task) => (
-          <div className="document-row" key={task.id}>
-            <div className="document-row-main">
-              <div className="document-name">{task.title || task.topic}</div>
-              <div className="document-meta">{task.reason || "Active research cycle"}</div>
+          {activeTask ? (
+            <div className="research-active-card">
+              <div className="research-active-topline">
+                <div>
+                  <div className="document-name">{activeTask.title || activeTask.topic}</div>
+                  <div className="document-meta">
+                    {activeTask.type && <span className="document-tag">{activeTask.type}</span>}
+                    <span className="document-tag">Priority {activeTask.priority}</span>
+                    <span className="document-tag">Researching</span>
+                  </div>
+                </div>
+                <strong className="research-progress-value">{activeTask.progress_percent || 0}%</strong>
+              </div>
+              <div className="research-progress-track" aria-label={`Research progress ${activeTask.progress_percent || 0}%`}>
+                <span style={{ width: `${Math.max(0, Math.min(100, activeTask.progress_percent || 0))}%` }} />
+              </div>
+              <div className="research-stage">{activeTask.progress_stage || "Initializing research"}</div>
+              <div className="research-metrics">
+                <div><span>Started</span><strong>{formatTime(activeTask.last_attempted_at || activeTask.updated_at)}</strong></div>
+                <div><span>Elapsed</span><strong>{formatElapsed(activeTask.last_attempted_at || activeTask.updated_at, now)}</strong></div>
+                <div><span>Sources checked</span><strong>{activeTask.sources_checked || 0}</strong></div>
+                <div><span>Documents found</span><strong>{activeTask.documents_found || 0}</strong></div>
+                <div><span>Knowledge updated</span><strong>{activeTask.knowledge_records_created || activeTask.knowledge_created || 0}</strong></div>
+              </div>
+              <div className="research-active-controls">
+                <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(activeTask, "pause")}>Pause</button>
+                <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(activeTask, "stop")}>Stop</button>
+              </div>
             </div>
-            <div className="doc-status doc-status-pending">Researching…</div>
+          ) : (
+            <div className="research-ready-state">TYK is ready for its next research task.</div>
+          )}
+        </section>
+
+        {health && (
+          <div className="research-system-summary">
+            <span>{health.documentsIndexed} documents indexed</span>
+            <span>{health.researchQueue.queued} queued</span>
+            <span>{health.documentStorage === "ok" ? "Storage OK" : "Storage status unknown"}</span>
+            <span>{health.cadence?.label || "Server scheduled"}</span>
           </div>
-        ))}
-        {queue.filter((task) => task.status === "researching").length === 0 && (
-          <div className="documents-empty">Waiting for the next server-side research cycle.</div>
         )}
-      </div>}
 
-      {loadedSuccessfully && <div className="teach-history">
-        <div className="teach-history-label">Queued to research</div>
-        {queue.filter((task) => ACTIVE_STATUSES.has(task.status) && task.status !== "researching").map((task) => (
+        <section className="research-accordion">
+          <button type="button" className="research-accordion-toggle" aria-expanded={queueOpen} onClick={() => toggleAccordion("tyk-research-queue", setQueueOpen, queueOpen)}>
+            <span aria-hidden="true">{queueOpen ? "▼" : "▶"}</span>
+            <span>Research Queue</span>
+            <span className="research-accordion-count">{queuedTasks.length}</span>
+          </button>
+          {queueOpen && <div className="research-accordion-content">
+            {queuedTasks.map((task) => (
           <div className="document-row" key={task.id}>
             <div className="document-row-main">
               <div className="document-name">{task.title || task.topic}</div>
@@ -211,48 +256,46 @@ function ResearchView({ identity }) {
                 {task.manually_prioritized && <span className="document-tag">PRIORITY RESEARCH</span>}
                 {task.entity_name && <span className="document-tag">{task.entity_name}</span>}
               </div>
-              {(task.status === "researching" || task.status === "paused" || task.status === "stopped") && (
-                <div className="document-meta">
-                  {task.progress_percent || 0}% · {task.progress_stage || "Initializing research"}
-                </div>
-              )}
-              {task.status === "done" && task.result && (
-                <div className="document-meta">{task.result}</div>
-              )}
-              {task.status !== "done" && task.reason && (
-                <div className="document-meta">{task.reason}</div>
-              )}
+              <div className="document-meta">Created {formatTime(task.created_at)} · Last attempted {formatTime(task.last_attempted_at)} · Next attempt {formatTime(task.next_attempt_at || task.next_research_date)}</div>
             </div>
             <div className="document-row-actions">
               <div className={statusClass(task.status)}>{STATUS_LABELS[task.status] || task.status}</div>
-              {task.status === "researching" && <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(task, "pause")}>Pause</button>}
-              {task.status === "researching" && <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(task, "stop")}>Stop</button>}
               {task.status === "queued" && <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(task, "prioritize")}>Prioritize</button>}
               {(task.status === "paused" || task.status === "stopped") && <button type="button" className="teach-skip-button" onClick={() => handleTaskAction(task, "start")}>Restart</button>}
             </div>
           </div>
-        ))}
-        {!loading && queue.filter((task) => ACTIVE_STATUSES.has(task.status) && task.status !== "researching").length === 0 && (
-          <div className="documents-empty">No queued research work.</div>
-        )}
-      </div>}
+            ))}
+            {!queuedTasks.length && <div className="documents-empty">No queued research work.</div>}
+          </div>}
+        </section>
 
-      {loadedSuccessfully && <div className="teach-history">
-        <div className="teach-history-label">Recent research log</div>
-        {log.map((entry) => (
-          <div className="teach-history-item" key={entry.id}>
-            <div className="teach-history-question">{entry.task_topic}</div>
-            <div className="teach-history-answer">
-              {entry.result || entry.failures || "No result recorded."}
-              {entry.documents_found > 0 && ` · ${entry.documents_found} document(s) found`}
-              {entry.ai_calls > 0 && ` · ${entry.ai_calls} AI call(s)`}
-            </div>
-          </div>
-        ))}
-        {!loading && log.length === 0 && (
-          <div className="documents-empty">No research runs logged yet.</div>
-        )}
-      </div>}
+        <section className="research-accordion">
+          <button type="button" className="research-accordion-toggle" aria-expanded={historyOpen} onClick={() => toggleAccordion("tyk-research-history", setHistoryOpen, historyOpen)}>
+            <span aria-hidden="true">{historyOpen ? "▼" : "▶"}</span>
+            <span>Research History</span>
+            <span className="research-accordion-count">{log.length}</span>
+          </button>
+          {historyOpen && <div className="research-accordion-content">
+            {log.map((entry) => (
+              <div className="teach-history-item" key={entry.id}>
+                <div className="teach-history-question">{entry.task_topic}</div>
+                <div className="document-meta">
+                  <span className={statusClass(entry.failures ? "failed" : "done")}>{entry.failures ? "Failed" : "Completed"}</span>
+                  <span>Started {formatTime(entry.started_at || entry.created_at)}</span>
+                  <span>Completed {formatTime(entry.completed_at || entry.created_at)}</span>
+                  <span>Sources {entry.sources_checked || entry.documents_found || 0}</span>
+                  <span>Documents {entry.documents_found || 0}</span>
+                  <span>Knowledge {entry.knowledge_created || entry.knowledge_records_created || 0}</span>
+                </div>
+                <div className="teach-history-answer">
+                  {entry.result || entry.failures || "No result recorded."}
+                </div>
+              </div>
+            ))}
+            {!log.length && <div className="documents-empty">No research runs logged yet.</div>}
+          </div>}
+        </section>
+      </>}
     </main>
   );
 }
