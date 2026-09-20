@@ -205,15 +205,16 @@ async function loadActiveAuditContext(conversationId) {
   if (!conversation?.active_audit) return null;
   const { data: audit } = await supabaseAdmin
     .from("hardware_audits")
-    .select("id, document_id")
+    .select("id, document_id, status, issues_count, summary")
     .eq("id", conversation.active_audit)
     .maybeSingle();
   if (!audit) return null;
-  const [{ data: document }, { data: chunks }] = await Promise.all([
-    supabaseAdmin.from("documents").select("name").eq("id", audit.document_id).maybeSingle(),
+  const [{ data: document }, { data: chunks }, { count: findingCount }] = await Promise.all([
+    supabaseAdmin.from("documents").select("name, status, error_message, file_path, file_type").eq("id", audit.document_id).maybeSingle(),
     supabaseAdmin.from("document_chunks").select("page_number, content").eq("document_id", audit.document_id).eq("document_scope", "AUDIT_ONLY").order("chunk_index", { ascending: true }),
+    supabaseAdmin.from("hardware_audit_findings").select("id", { count: "exact", head: true }).eq("audit_id", audit.id),
   ]);
-  return { ...audit, documentName: document?.name || "Hardware schedule", chunks: chunks || [] };
+  return { ...audit, document: document || {}, findingCount: findingCount || 0, documentName: document?.name || "Hardware schedule", chunks: chunks || [] };
 }
 
 function compactAuditText(text) {
@@ -222,7 +223,21 @@ function compactAuditText(text) {
 
 function answerActiveAuditQuestion(question, auditContext) {
   const text = question.toLowerCase();
-  if (!/(?:\bd\s*3\b|d3|opening\s*3|first|second)/i.test(question)) return null;
+  const isAuditFollowup = /anything|what did you find|did you find|what(?:'s| is) wrong|show me|any issues|how does it look|check|look at|closer|fire door|opening/i.test(text);
+  if (auditContext.document?.status === "error" || auditContext.status === "error") {
+    if (!isAuditFollowup) return null;
+    return { answer: `I can access ${auditContext.documentName}, but I couldn’t extract the schedule reliably. The file is still attached to this audit. Try OCR analysis or open the document to review its pages.`, sources: [] };
+  }
+  if (!auditContext.chunks.length && auditContext.status !== "complete") {
+    if (!isAuditFollowup) return null;
+    return { answer: `I’m still reviewing ${auditContext.documentName}. The audit is currently ${auditContext.status || "processing"}; the document is still attached and you do not need to upload it again.`, sources: [] };
+  }
+  if (!/(?:\bd\s*3\b|d3|opening\s*3|first|second)/i.test(question)) {
+    if (!isAuditFollowup) return null;
+    return { answer: auditContext.status === "complete"
+      ? `Yes. I found ${auditContext.findingCount} item${auditContext.findingCount === 1 ? "" : "s"} to review in ${auditContext.documentName}. I can walk through the findings or check a specific opening.`
+      : `I’m still reviewing ${auditContext.documentName}. I’ll keep the audit attached to this conversation as the analysis continues.`, sources: [] };
+  }
   const pageText = auditContext.chunks.filter((chunk) => chunk.page_number === 3).map((chunk) => chunk.content).join(" ");
   const compact = compactAuditText(pageText);
   const d3Start = compact.search(/D3SingleDoor/i);

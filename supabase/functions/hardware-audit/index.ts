@@ -113,6 +113,15 @@ async function appendAuditMessage(conversationId, content, metadata) {
   await supabase.from("messages").insert({ conversation_id: conversationId, role: "assistant", content, metadata: { audit: true, ...metadata } });
 }
 
+async function linkAuditDocument(auditId, documentId, conversationId) {
+  const [{ error: documentError }, { error: chunkError }, { error: conversationError }] = await Promise.all([
+    supabase.from("documents").update({ document_scope: "AUDIT_ONLY", audit_id: auditId, conversation_id: conversationId }).eq("id", documentId),
+    supabase.from("document_chunks").update({ document_scope: "AUDIT_ONLY", audit_id: auditId, conversation_id: conversationId }).eq("document_id", documentId),
+    supabase.from("conversations").update({ active_audit: auditId, active_document: documentId }).eq("id", conversationId),
+  ]);
+  if (documentError || chunkError || conversationError) throw new Error("Could not preserve the audit document relationship.");
+}
+
 async function buildFindings(parsed, documentId) {
   const findings = [];
   const evidence = {
@@ -176,8 +185,7 @@ async function buildFindings(parsed, documentId) {
 
 async function runAudit(auditId, documentId) {
   const { data: audit } = await supabase.from("hardware_audits").select("conversation_id, project_name").eq("id", auditId).single();
-  await supabase.from("documents").update({ document_scope: "AUDIT_ONLY", audit_id: auditId, conversation_id: audit?.conversation_id || null }).eq("id", documentId);
-  await supabase.from("document_chunks").update({ document_scope: "AUDIT_ONLY", audit_id: auditId, conversation_id: audit?.conversation_id || null }).eq("document_id", documentId);
+  await linkAuditDocument(auditId, documentId, audit?.conversation_id || null);
   await appendAuditMessage(audit?.conversation_id, "I'm reviewing the hardware schedule now.", { auditId, auditStatus: "analyzing", auditStage: "Extracting schedule" });
   const [text, chunks] = await loadAuditText(documentId);
   await appendAuditMessage(audit?.conversation_id, "The schedule is readable. I’m extracting openings and hardware items.", { auditId, auditStatus: "analyzing", auditStage: "Extracting openings and hardware" });
@@ -227,13 +235,11 @@ Deno.serve(async (req) => {
       await supabase.from("messages").insert({ conversation_id: conversation.id, role: "user", content: `Hardware Schedule Audit: ${projectName}`, metadata: { audit: true, attachments: [body.document_name || projectName] } });
       const { data: audit, error } = await supabase.from("hardware_audits").insert({ document_id: body.document_id, conversation_id: conversation.id, project_name: projectName, ...owner }).select().single();
       if (error) return json({ error: error.message }, 500);
-      await supabase.from("documents").update({ document_scope: "AUDIT_ONLY", audit_id: audit.id, conversation_id: conversation.id }).eq("id", body.document_id);
-      await supabase.from("document_chunks").update({ document_scope: "AUDIT_ONLY", audit_id: audit.id, conversation_id: conversation.id }).eq("document_id", body.document_id);
-      await supabase.from("conversations").update({ active_audit: audit.id, active_document: body.document_id }).eq("id", conversation.id);
-      await appendAuditMessage(conversation.id, "I've got the hardware schedule. I'm reviewing it now.", { auditId: audit.id, auditStatus: "analyzing", auditStage: "Schedule received", documentId: body.document_id });
+      await linkAuditDocument(audit.id, body.document_id, conversation.id);
+      await appendAuditMessage(conversation.id, "The hardware schedule is attached to this audit. I’m starting the document analysis now.", { auditId: audit.id, auditStatus: "analyzing", auditStage: "Queued for extraction", documentId: body.document_id });
       const work = runAudit(audit.id, body.document_id).catch(async () => {
         await supabase.from("hardware_audits").update({ status: "error", summary: { error: "Audit extraction failed." } }).eq("id", audit.id);
-        await appendAuditMessage(conversation.id, "I couldn’t extract the schedule correctly. I’m retrying the document analysis.", { auditId: audit.id, auditStatus: "error", auditStage: "Extraction failed" });
+        await appendAuditMessage(conversation.id, "I can access the original hardware schedule, but I couldn’t extract the schedule reliably. The audit and document are still attached; try OCR analysis or open the document to review the pages.", { auditId: audit.id, auditStatus: "error", auditStage: "Extraction failed", documentId: body.document_id });
       });
       if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(work);
       else await work;

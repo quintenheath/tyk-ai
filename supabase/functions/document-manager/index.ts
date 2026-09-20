@@ -205,7 +205,7 @@ async function processDocument(documentId) {
     .eq("content_hash", contentHash)
     .neq("id", documentId)
     .maybeSingle();
-  if (duplicate) {
+  if (duplicate && doc.document_scope !== "AUDIT_ONLY") {
     await supabase.from("documents").update({
       status: "duplicate",
       content_hash: null,
@@ -226,7 +226,12 @@ async function processDocument(documentId) {
     .limit(1)
     .maybeSingle();
   const familyId = familyCandidate?.document_family_id || familyCandidate?.id || null;
-  await supabase.from("documents").update({ content_hash: contentHash, document_family_id: familyId }).eq("id", documentId);
+  await supabase.from("documents").update({
+    ...(doc.document_scope === "AUDIT_ONLY" ? { content_hash: null } : { content_hash: contentHash }),
+    document_family_id: familyId,
+    status: "processing",
+    error_message: null,
+  }).eq("id", documentId);
 
   const isPdf = (doc.file_type || "").includes("pdf") ||
     doc.file_path.toLowerCase().endsWith(".pdf");
@@ -263,7 +268,16 @@ async function processDocument(documentId) {
     .select("document_scope, audit_id, conversation_id")
     .eq("id", documentId)
     .single();
-  const embeddings = await embedTexts(records.map((r) => r.content));
+  let embeddings;
+  let embeddingWarning = null;
+  try {
+    embeddings = await embedTexts(records.map((r) => r.content));
+  } catch (error) {
+    if (currentScope?.document_scope !== "AUDIT_ONLY") throw error;
+    embeddings = records.map(() => null);
+    embeddingWarning = "Text extracted; embeddings unavailable for this audit document.";
+    console.error("Audit document embeddings unavailable; continuing with extracted text:", error);
+  }
 
   const rows = records.map((record, index) => ({
     document_id: documentId,
@@ -287,7 +301,7 @@ async function processDocument(documentId) {
 
   await supabase
     .from("documents")
-    .update({ status: "indexed", chunk_count: rows.length })
+    .update({ status: "indexed", chunk_count: rows.length, error_message: embeddingWarning })
     .eq("id", documentId);
 
   // Auto-classify from the first couple pages - never blocks indexing.

@@ -233,6 +233,12 @@ function App() {
     }
   }
 
+  function handleComposerKeyDown(event) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    if (!loading) event.currentTarget.form?.requestSubmit();
+  }
+
   function handleNewChat() {
     setActiveConversationId(null);
     setMessages([]);
@@ -415,6 +421,7 @@ function App() {
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={handleComposerKeyDown}
           placeholder="Ask TYK anything..."
           rows={extraClassName === "conversation-input" ? "1" : "3"}
           disabled={loading}
