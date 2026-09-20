@@ -34,6 +34,7 @@ function ResearchView({ identity }) {
   const [log, setLog] = useState([]);
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadedSuccessfully, setLoadedSuccessfully] = useState(false);
   const [running, setRunning] = useState(false);
   const [errorText, setErrorText] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -55,7 +56,9 @@ function ResearchView({ identity }) {
   }, []);
 
   async function refresh() {
+    setLoading(true);
     setErrorText("");
+    setLoadedSuccessfully(false);
     try {
       const [{ queue: q }, { log: l }, { health: h }] = await Promise.all([
         invokeResearch({ action: "queue", token: identity?.token }),
@@ -65,6 +68,7 @@ function ResearchView({ identity }) {
       setQueue(q || []);
       setLog(l || []);
       setHealth(h || null);
+      setLoadedSuccessfully(true);
     } catch (err) {
       console.error("Failed to load research dashboard:", err);
       setErrorText("Couldn't load the research dashboard.");
@@ -123,7 +127,12 @@ function ResearchView({ identity }) {
         </p>
       </div>
 
-      {errorText && <div className="inline-error">{errorText}</div>}
+      {errorText && (
+        <div className="inline-error research-load-error">
+          <span>{errorText}</span>
+          <button type="button" className="teach-skip-button" onClick={refresh}>Retry</button>
+        </div>
+      )}
 
       <div className="documents-upload">
         <button type="button" className="upload-button" onClick={handleRunNow} disabled={running}>
@@ -173,7 +182,7 @@ function ResearchView({ identity }) {
         </div>
       )}
 
-      <div className="teach-history">
+      {loadedSuccessfully && <div className="teach-history">
         <div className="teach-history-label">Currently researching</div>
         {queue.filter((task) => task.status === "researching").map((task) => (
           <div className="document-row" key={task.id}>
@@ -187,9 +196,9 @@ function ResearchView({ identity }) {
         {queue.filter((task) => task.status === "researching").length === 0 && (
           <div className="documents-empty">Waiting for the next server-side research cycle.</div>
         )}
-      </div>
+      </div>}
 
-      <div className="teach-history">
+      {loadedSuccessfully && <div className="teach-history">
         <div className="teach-history-label">Queued to research</div>
         {queue.filter((task) => ACTIVE_STATUSES.has(task.status) && task.status !== "researching").map((task) => (
           <div className="document-row" key={task.id}>
@@ -226,9 +235,9 @@ function ResearchView({ identity }) {
         {!loading && queue.filter((task) => ACTIVE_STATUSES.has(task.status) && task.status !== "researching").length === 0 && (
           <div className="documents-empty">No queued research work.</div>
         )}
-      </div>
+      </div>}
 
-      <div className="teach-history">
+      {loadedSuccessfully && <div className="teach-history">
         <div className="teach-history-label">Recent research log</div>
         {log.map((entry) => (
           <div className="teach-history-item" key={entry.id}>
@@ -243,7 +252,7 @@ function ResearchView({ identity }) {
         {!loading && log.length === 0 && (
           <div className="documents-empty">No research runs logged yet.</div>
         )}
-      </div>
+      </div>}
     </main>
   );
 }
