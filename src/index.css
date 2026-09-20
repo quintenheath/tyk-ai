@@ -246,6 +246,46 @@ button {
   white-space: nowrap;
 }
 
+.audit-change-review {
+  flex: 0 0 auto;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(255, 184, 77, 0.28);
+  border-radius: 10px;
+  background: rgba(43, 34, 22, 0.48);
+}
+
+.audit-change-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.audit-change-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.audit-change-actions span {
+  color: #f0c47a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.audit-change-actions button {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #1a242a;
+  color: #e7ebee;
+}
+
 .message {
   max-width: 100%;
 }
@@ -1671,6 +1711,15 @@ button {
   .research-progress-value {
     display: block;
     margin-top: 8px;
+  }
+
+  .audit-change-row {
+    display: block;
+  }
+
+  .audit-change-actions {
+    justify-content: flex-start;
+    margin-top: 10px;
   }
 }
 

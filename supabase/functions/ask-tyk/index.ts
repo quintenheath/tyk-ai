@@ -209,12 +209,14 @@ async function loadActiveAuditContext(conversationId) {
     .eq("id", conversation.active_audit)
     .maybeSingle();
   if (!audit) return null;
-  const [{ data: document }, { data: chunks }, { count: findingCount }] = await Promise.all([
+  const [{ data: document }, { data: chunks }, { count: findingCount }, { data: fireCheck }, { data: changes }] = await Promise.all([
     supabaseAdmin.from("documents").select("name, status, error_message, file_path, file_type").eq("id", audit.document_id).maybeSingle(),
     supabaseAdmin.from("document_chunks").select("page_number, content").eq("document_id", audit.document_id).eq("document_scope", "AUDIT_ONLY").order("chunk_index", { ascending: true }),
     supabaseAdmin.from("hardware_audit_findings").select("id", { count: "exact", head: true }).eq("audit_id", audit.id),
+    supabaseAdmin.from("hardware_audit_fire_checks").select("status, findings_count, evidence").eq("audit_id", audit.id).maybeSingle(),
+    supabaseAdmin.from("hardware_audit_changes").select("id, original_value, proposed_value, decision, opening, hardware_item, reason, evidence").eq("audit_id", audit.id).order("created_at", { ascending: true }),
   ]);
-  return { ...audit, document: document || {}, findingCount: findingCount || 0, documentName: document?.name || "Hardware schedule", chunks: chunks || [] };
+  return { ...audit, document: document || {}, fireCheck: fireCheck || null, changes: changes || [], findingCount: findingCount || 0, documentName: document?.name || "Hardware schedule", chunks: chunks || [] };
 }
 
 function compactAuditText(text) {
@@ -224,6 +226,12 @@ function compactAuditText(text) {
 function answerActiveAuditQuestion(question, auditContext) {
   const text = question.toLowerCase();
   const isAuditFollowup = /anything|what did you find|did you find|what(?:'s| is) wrong|show me|any issues|how does it look|check|look at|closer|fire door|opening/i.test(text);
+  if (/fire audit|fire check|fire rating|fire door|fire-rated opening/i.test(text) && auditContext.fireCheck) {
+    const check = auditContext.fireCheck;
+    return { answer: check.status === "PASSED"
+      ? "Fire check passed. I did not find a supported fire-related issue in the schedule."
+      : `Fire check is ${check.status.toLowerCase()}. It has ${check.findings_count || 0} fire-related item${check.findings_count === 1 ? "" : "s"} to review.`, sources: [] };
+  }
   if (auditContext.document?.status === "error" || auditContext.status === "error") {
     if (!isAuditFollowup) return null;
     return { answer: `I can access ${auditContext.documentName}, but I couldn’t extract the schedule reliably. The file is still attached to this audit. Try OCR analysis or open the document to review its pages.`, sources: [] };

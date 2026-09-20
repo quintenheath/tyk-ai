@@ -37,7 +37,7 @@ async function createReportPdf(audit, findings) {
   return pdf.save();
 }
 
-async function createReviewedPdf(audit, findings, originalBytes) {
+async function createReviewedPdf(audit, findings, changes, originalBytes) {
   const pdf = await PDFDocument.load(originalBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   let page = pdf.addPage();
@@ -59,6 +59,10 @@ async function createReviewedPdf(audit, findings, originalBytes) {
     if (finding.recommendation) draw(`Recommendation: ${finding.recommendation}`);
     draw(`Page: ${finding.evidence?.page || "?"} | Opening: ${finding.evidence?.opening || "?"}`);
     y -= 8;
+  }
+  for (const change of changes) {
+    draw(`${change.decision || "PENDING"} | ${change.opening || "Schedule item"} | ${change.original_value || ""}${change.proposed_value ? ` -> ${change.proposed_value}` : ""}`, 10);
+    draw(change.reason || "Review proposed change.");
   }
   return pdf.save();
 }
@@ -209,6 +213,28 @@ async function buildFindings(parsed, documentId) {
   return findings;
 }
 
+async function buildProposedChanges(auditId, documentId, findings, parsed) {
+  const finishFinding = findings.find((finding) => /finish/i.test(finding.title));
+  if (!finishFinding) return [];
+  const values = [...new Set(parsed.finishes.map((value) => value.toUpperCase()))];
+  const rows = values.map((value) => ({
+    audit_id: auditId,
+    finding_id: finishFinding.id,
+    document_id: documentId,
+    hardware_item: "Schedule finish notation",
+    page: finishFinding.evidence?.page || null,
+    original_value: value,
+    proposed_value: null,
+    reason: "A finish notation differs from other values in the schedule; no replacement is proposed without project evidence.",
+    evidence: { ...finishFinding.evidence, state: "NEEDS_REVIEW" },
+    source: { document_id: documentId, page: finishFinding.evidence?.page || null },
+    decision: "PENDING",
+  }));
+  if (!rows.length) return [];
+  const { data } = await supabase.from("hardware_audit_changes").insert(rows).select();
+  return data || [];
+}
+
 async function runAudit(auditId, documentId) {
   const { data: audit } = await supabase.from("hardware_audits").select("conversation_id, project_name").eq("id", auditId).single();
   await linkAuditDocument(auditId, documentId, audit?.conversation_id || null);
@@ -224,6 +250,19 @@ async function runAudit(auditId, documentId) {
     savedFindings = result.data || [];
   }
   const fireFindings = savedFindings.filter((finding) => /COMPLIANCE|CODE|FIRE/i.test(finding.category) || /fire/i.test(finding.title));
+  const auditChanges = await buildProposedChanges(auditId, documentId, savedFindings, parsed);
+  const fireStatus = parsed.ratings.length ? "NEEDS_REVIEW" : "PASSED";
+  await supabase.from("hardware_audit_fire_checks").upsert({
+    audit_id: auditId,
+    document_id: documentId,
+    conversation_id: audit?.conversation_id,
+    status: fireStatus,
+    started_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+    findings_count: fireFindings.length,
+    evidence: { ratings: parsed.ratings, openings: parsed.openings },
+    affected_openings: parsed.openings.map((opening) => opening.id),
+  }, { onConflict: "audit_id" });
   const colourFinding = savedFindings.find((finding) => /finish/i.test(finding.title));
   const auditChecks = {
     fire: { status: fireFindings.length ? "ISSUES FOUND" : parsed.ratings.length ? "NEEDS REVIEW" : "PASSED", findingIds: fireFindings.map((finding) => finding.id) },
@@ -231,7 +270,7 @@ async function runAudit(auditId, documentId) {
     colour: { status: colourFinding ? "ISSUES FOUND" : parsed.finishes.length ? "PASSED" : "NEEDS REVIEW", findingIds: colourFinding ? [colourFinding.id] : [] },
   };
   const itemSummary = parsed.hardwareItems.slice(0, 20).map((item) => `Page ${item.page}: ${item.text}`).join("\n");
-  await appendAuditMessage(audit?.conversation_id, `Here’s what I found${audit?.project_name ? ` for ${audit.project_name}` : ""}.\n\nOpenings: ${parsed.openings.map((opening) => `${opening.id} (page ${opening.page})`).join(", ") || "None identified"}\n\nHardware items:\n${itemSummary || "No product lines were identified."}\n\n${savedFindings.length ? `I found ${savedFindings.length} item${savedFindings.length === 1 ? "" : "s"} to review below.` : "I did not find an issue requiring review in the extracted text."}`, { auditId, auditStatus: "complete", auditStage: "Audit complete", auditChecks, auditFindings: savedFindings, documentId, citations: chunks.map((chunk) => ({ documentId, page: chunk.page_number })) });
+  await appendAuditMessage(audit?.conversation_id, `Here’s what I found${audit?.project_name ? ` for ${audit.project_name}` : ""}.\n\nOpenings: ${parsed.openings.map((opening) => `${opening.id} (page ${opening.page})`).join(", ") || "None identified"}\n\nHardware items:\n${itemSummary || "No product lines were identified."}\n\n${savedFindings.length ? `I found ${savedFindings.length} item${savedFindings.length === 1 ? "" : "s"} to review below.` : "I did not find an issue requiring review in the extracted text."}`, { auditId, auditStatus: "complete", auditStage: "Audit complete", auditChecks: { ...auditChecks, fire: { status: fireStatus, findingIds: fireFindings.map((finding) => finding.id) } }, auditFindings: savedFindings, auditChanges, documentId, citations: chunks.map((chunk) => ({ documentId, page: chunk.page_number })) });
   await supabase.from("hardware_audits").update({
     status: "complete",
     openings_count: parsed.openings.length,
@@ -301,6 +340,30 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
+    if (body.action === "changes") {
+      const identity = await loadIdentity(body);
+      if (!identity) return json({ error: "A valid session token is required" }, 401);
+      const ownerColumnName = identity.type === "user" ? "user_id" : "session_id";
+      const { data: audit } = await supabase.from("hardware_audits").select("id").eq("id", body.audit_id).eq(ownerColumnName, identity.id).maybeSingle();
+      if (!audit) return json({ error: "Audit not found" }, 404);
+      const { data, error } = await supabase.from("hardware_audit_changes").select("*").eq("audit_id", body.audit_id).order("created_at", { ascending: true });
+      if (error) return json({ error: "Could not load proposed changes." }, 500);
+      return json({ changes: data || [] });
+    }
+
+    if (body.action === "decide-change") {
+      const identity = await loadIdentity(body);
+      if (!identity) return json({ error: "A valid session token is required" }, 401);
+      if (!['ACCEPTED', 'REJECTED', 'PENDING'].includes(body.decision)) return json({ error: "Invalid change decision" }, 400);
+      const ownerColumnName = identity.type === "user" ? "user_id" : "session_id";
+      const { data: change } = await supabase.from("hardware_audit_changes").select("audit_id").eq("id", body.change_id).maybeSingle();
+      const { data: audit } = await supabase.from("hardware_audits").select("id").eq("id", change?.audit_id).eq(ownerColumnName, identity.id).maybeSingle();
+      if (!audit) return json({ error: "Change not found" }, 404);
+      const { error } = await supabase.from("hardware_audit_changes").update({ decision: body.decision, decided_by: identity.type === "user" ? identity.id : null, decided_at: body.decision === "PENDING" ? null : new Date().toISOString() }).eq("id", body.change_id);
+      if (error) return json({ error: "Could not save that decision." }, 500);
+      return json({ ok: true });
+    }
+
     if (body.action === "export-report") {
       const identity = await loadIdentity(body);
       if (!identity) return json({ error: "A valid session token is required" }, 401);
@@ -325,12 +388,13 @@ Deno.serve(async (req) => {
       if (error || !audit) return json({ error: "Audit not found" }, 404);
       const { data: document } = await supabase.from("documents").select("file_path, file_type, name").eq("id", audit.document_id).single();
       const { data: findings } = await supabase.from("hardware_audit_findings").select("*").eq("audit_id", audit.id).order("severity");
+      const { data: changes } = await supabase.from("hardware_audit_changes").select("*").eq("audit_id", audit.id).order("created_at");
       if (!document?.file_path) return json({ error: "The original schedule file is unavailable." }, 409);
       const { data: original, error: downloadError } = await supabase.storage.from("tyk-documents").download(document.file_path);
       if (downloadError || !original) return json({ error: "Could not read the original schedule." }, 500);
       const bytes = new Uint8Array(await original.arrayBuffer());
       const reviewed = (document.file_type || "").includes("pdf") || document.name?.toLowerCase().endsWith(".pdf")
-        ? await createReviewedPdf(audit, findings || [], bytes)
+        ? await createReviewedPdf(audit, findings || [], changes || [], bytes)
         : await createReportPdf(audit, findings || []);
       const path = `_exports/${crypto.randomUUID()}-reviewed-hardware-audit.pdf`;
       const { error: uploadError } = await supabase.storage.from("tyk-documents").upload(path, reviewed, { contentType: "application/pdf" });

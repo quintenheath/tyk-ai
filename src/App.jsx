@@ -53,6 +53,7 @@ function App() {
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
   const [selectedAuditFinding, setSelectedAuditFinding] = useState(null);
   const [deletedReadOnly, setDeletedReadOnly] = useState(false);
+  const [auditChangeState, setAuditChangeState] = useState([]);
 
   const messagesEndRef = useRef(null);
   const conversationMessagesRef = useRef(null);
@@ -63,6 +64,26 @@ function App() {
   const auditId = auditMessage?.metadata?.auditId || null;
   const auditSummaryMessage = [...messages].reverse().find((item) => item.metadata?.auditChecks);
   const auditChecks = auditSummaryMessage?.metadata?.auditChecks || null;
+  const auditChanges = auditSummaryMessage?.metadata?.auditChanges || [];
+  const displayedAuditChanges = auditChangeState.length ? auditChangeState : auditChanges;
+
+  useEffect(() => {
+    if (!auditId) {
+      setAuditChangeState([]);
+      return undefined;
+    }
+    let stopped = false;
+    async function loadChanges() {
+      try {
+        const { data, error } = await supabase.functions.invoke("hardware-audit", { body: { action: "changes", audit_id: auditId, token: identity?.token } });
+        if (!stopped && !error && !data?.error) setAuditChangeState(data.changes || []);
+      } catch (err) {
+        console.error("Failed to load audit change decisions:", err);
+      }
+    }
+    loadChanges();
+    return () => { stopped = true; };
+  }, [auditId, identity]);
 
   function openAuditCheck(check) {
     const findingIds = new Set(check?.findingIds || []);
@@ -320,6 +341,25 @@ function App() {
       console.error("Failed to export reviewed audit:", err);
       setErrorText("Could not create the reviewed schedule.");
     }
+  }
+
+  async function decideAuditChange(change, decision) {
+    try {
+      const { data, error } = await supabase.functions.invoke("hardware-audit", { body: { action: "decide-change", change_id: change.id, decision, token: identity?.token } });
+      if (error || data?.error) throw error || new Error(data?.error);
+      setAuditChangeState((current) => current.map((item) => item.id === change.id ? { ...item, decision } : item));
+      if (activeConversationId) setMessages(await loadConversationMessages(activeConversationId, identity));
+    } catch (err) {
+      console.error("Failed to save audit change decision:", err);
+      setErrorText("Could not save that change decision.");
+    }
+  }
+
+  async function applySelectedChanges() {
+    const accepted = displayedAuditChanges.filter((change) => change.decision === "ACCEPTED").length;
+    if (!accepted) return;
+    if (!window.confirm(`Apply ${accepted} selected change${accepted === 1 ? "" : "s"}?`)) return;
+    await downloadReviewedAudit();
   }
 
   async function handleSelectConversation(conversationId) {
@@ -634,6 +674,22 @@ function App() {
                   ))}
                 </div>
                 <button type="button" className="teach-skip-button audit-reviewed-download" onClick={downloadReviewedAudit}>Download Reviewed Schedule</button>
+              </section>
+            )}
+            {displayedAuditChanges.length > 0 && (
+              <section className="audit-change-review">
+                <div className="audit-summary-header"><strong>Individual Changes</strong><span>{displayedAuditChanges.length} proposed</span></div>
+                {displayedAuditChanges.map((change) => (
+                  <div className="audit-change-row" key={change.id}>
+                    <div><strong>{change.opening || "Schedule item"} — {change.hardware_item}</strong><div className="document-meta">{change.original_value}{change.proposed_value ? ` → ${change.proposed_value}` : " · verify required"}</div><div className="document-meta">{change.reason}</div></div>
+                    <div className="audit-change-actions">
+                      <span>{change.decision || "PENDING"}</span>
+                      <button type="button" onClick={() => decideAuditChange(change, "ACCEPTED")}>✓ Yes</button>
+                      <button type="button" onClick={() => decideAuditChange(change, "REJECTED")}>✕ No</button>
+                    </div>
+                  </div>
+                ))}
+                <button type="button" className="upload-button" onClick={applySelectedChanges}>Apply Selected Changes</button>
               </section>
             )}
             <div className="conversation-messages" ref={conversationMessagesRef} onScroll={handleConversationScroll}>
