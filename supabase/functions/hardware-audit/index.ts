@@ -37,6 +37,32 @@ async function createReportPdf(audit, findings) {
   return pdf.save();
 }
 
+async function createReviewedPdf(audit, findings, originalBytes) {
+  const pdf = await PDFDocument.load(originalBytes);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  let page = pdf.addPage();
+  let y = page.getHeight() - 48;
+  const draw = (text, size = 10) => {
+    if (y < 48) { page = pdf.addPage(); y = page.getHeight() - 48; }
+    page.drawText(String(text).slice(0, 120), { x: 42, y, size, font });
+    y -= size + 8;
+  };
+  draw("TYK Reviewed Hardware Schedule", 18);
+  draw(`Project: ${audit.project_name || "Untitled"}`);
+  draw("Original schedule pages are preserved unchanged.");
+  draw("Legend: PENDING REVIEW = yellow | MANUFACTURER/PRODUCT = orange | CODE/COMPLIANCE = red | INFORMATIONAL = blue");
+  y -= 8;
+  for (const finding of findings) {
+    const state = finding.status || "NEEDS_REVIEW";
+    draw(`${state} | ${finding.severity} | ${finding.category} | ${finding.title}`, 11);
+    draw(`Evidence: ${finding.description}`);
+    if (finding.recommendation) draw(`Recommendation: ${finding.recommendation}`);
+    draw(`Page: ${finding.evidence?.page || "?"} | Opening: ${finding.evidence?.opening || "?"}`);
+    y -= 8;
+  }
+  return pdf.save();
+}
+
 function parseSchedule(text) {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const pageForLine = (line) => Number(line.match(/^\[Page\s+(\d+)\]/i)?.[1] || 1);
@@ -197,8 +223,15 @@ async function runAudit(auditId, documentId) {
     const result = await supabase.from("hardware_audit_findings").insert(findings.map((finding) => ({ audit_id: auditId, ...finding }))).select();
     savedFindings = result.data || [];
   }
+  const fireFindings = savedFindings.filter((finding) => /COMPLIANCE|CODE|FIRE/i.test(finding.category) || /fire/i.test(finding.title));
+  const colourFinding = savedFindings.find((finding) => /finish/i.test(finding.title));
+  const auditChecks = {
+    fire: { status: fireFindings.length ? "ISSUES FOUND" : parsed.ratings.length ? "NEEDS REVIEW" : "PASSED", findingIds: fireFindings.map((finding) => finding.id) },
+    suggestions: { status: "COMPLETE", count: savedFindings.length },
+    colour: { status: colourFinding ? "ISSUES FOUND" : parsed.finishes.length ? "PASSED" : "NEEDS REVIEW", findingIds: colourFinding ? [colourFinding.id] : [] },
+  };
   const itemSummary = parsed.hardwareItems.slice(0, 20).map((item) => `Page ${item.page}: ${item.text}`).join("\n");
-  await appendAuditMessage(audit?.conversation_id, `Here’s what I found${audit?.project_name ? ` for ${audit.project_name}` : ""}.\n\nOpenings: ${parsed.openings.map((opening) => `${opening.id} (page ${opening.page})`).join(", ") || "None identified"}\n\nHardware items:\n${itemSummary || "No product lines were identified."}\n\n${savedFindings.length ? `I found ${savedFindings.length} item${savedFindings.length === 1 ? "" : "s"} to review below.` : "I did not find an issue requiring review in the extracted text."}`, { auditId, auditStatus: "complete", auditStage: "Audit complete", auditFindings: savedFindings, documentId, citations: chunks.map((chunk) => ({ documentId, page: chunk.page_number })) });
+  await appendAuditMessage(audit?.conversation_id, `Here’s what I found${audit?.project_name ? ` for ${audit.project_name}` : ""}.\n\nOpenings: ${parsed.openings.map((opening) => `${opening.id} (page ${opening.page})`).join(", ") || "None identified"}\n\nHardware items:\n${itemSummary || "No product lines were identified."}\n\n${savedFindings.length ? `I found ${savedFindings.length} item${savedFindings.length === 1 ? "" : "s"} to review below.` : "I did not find an issue requiring review in the extracted text."}`, { auditId, auditStatus: "complete", auditStage: "Audit complete", auditChecks, auditFindings: savedFindings, documentId, citations: chunks.map((chunk) => ({ documentId, page: chunk.page_number })) });
   await supabase.from("hardware_audits").update({
     status: "complete",
     openings_count: parsed.openings.length,
@@ -282,6 +315,29 @@ Deno.serve(async (req) => {
       const { data: signed, error: signedError } = await supabase.storage.from("tyk-documents").createSignedUrl(path, 600, { download: `${audit.project_name || "hardware-audit"}.pdf` });
       if (signedError) return json({ error: "Could not create secure report download." }, 500);
       return json({ url: signed.signedUrl, expiresIn: 600 });
+    }
+
+    if (body.action === "export-reviewed") {
+      const identity = await loadIdentity(body);
+      if (!identity) return json({ error: "A valid session token is required" }, 401);
+      const ownerColumnName = identity.type === "user" ? "user_id" : "session_id";
+      const { data: audit, error } = await supabase.from("hardware_audits").select("*").eq("id", body.audit_id).eq(ownerColumnName, identity.id).single();
+      if (error || !audit) return json({ error: "Audit not found" }, 404);
+      const { data: document } = await supabase.from("documents").select("file_path, file_type, name").eq("id", audit.document_id).single();
+      const { data: findings } = await supabase.from("hardware_audit_findings").select("*").eq("audit_id", audit.id).order("severity");
+      if (!document?.file_path) return json({ error: "The original schedule file is unavailable." }, 409);
+      const { data: original, error: downloadError } = await supabase.storage.from("tyk-documents").download(document.file_path);
+      if (downloadError || !original) return json({ error: "Could not read the original schedule." }, 500);
+      const bytes = new Uint8Array(await original.arrayBuffer());
+      const reviewed = (document.file_type || "").includes("pdf") || document.name?.toLowerCase().endsWith(".pdf")
+        ? await createReviewedPdf(audit, findings || [], bytes)
+        : await createReportPdf(audit, findings || []);
+      const path = `_exports/${crypto.randomUUID()}-reviewed-hardware-audit.pdf`;
+      const { error: uploadError } = await supabase.storage.from("tyk-documents").upload(path, reviewed, { contentType: "application/pdf" });
+      if (uploadError) return json({ error: "Could not create the reviewed schedule." }, 500);
+      const { data: signed, error: signedError } = await supabase.storage.from("tyk-documents").createSignedUrl(path, 600, { download: `${audit.project_name || "hardware-schedule"}-reviewed.pdf` });
+      if (signedError) return json({ error: "Could not create the reviewed schedule download." }, 500);
+      return json({ url: signed.signedUrl, expiresIn: 600, format: "pdf" });
     }
 
     return json({ error: "Unknown action" }, 400);

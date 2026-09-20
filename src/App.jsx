@@ -55,10 +55,20 @@ function App() {
   const [deletedReadOnly, setDeletedReadOnly] = useState(false);
 
   const messagesEndRef = useRef(null);
+  const conversationMessagesRef = useRef(null);
+  const shouldAutoScrollRef = useRef(true);
   const navigationButtonRef = useRef(null);
   const view = standaloneView || (activeConversationId ? "conversation" : "home");
   const auditMessage = messages.find((item) => item.metadata?.auditId);
   const auditId = auditMessage?.metadata?.auditId || null;
+  const auditSummaryMessage = [...messages].reverse().find((item) => item.metadata?.auditChecks);
+  const auditChecks = auditSummaryMessage?.metadata?.auditChecks || null;
+
+  function openAuditCheck(check) {
+    const findingIds = new Set(check?.findingIds || []);
+    const finding = messages.flatMap((message) => message.metadata?.auditFindings || []).find((item) => findingIds.has(item.id));
+    if (finding) setSelectedAuditFinding(finding);
+  }
 
   useEffect(() => {
     if (view !== "conversation" || !activeConversationId || !auditId) return undefined;
@@ -111,8 +121,14 @@ function App() {
   }, [identity]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!shouldAutoScrollRef.current) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
+
+  function handleConversationScroll(event) {
+    const element = event.currentTarget;
+    shouldAutoScrollRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+  }
 
   async function refreshConversations() {
     try {
@@ -162,6 +178,7 @@ function App() {
     setMessage("");
     setAttachedDocs([]);
     setLoading(true);
+    shouldAutoScrollRef.current = true;
     setErrorText("");
 
     try {
@@ -290,6 +307,18 @@ function App() {
       window.open(url, "_blank", "noopener,noreferrer");
     } catch (err) {
       console.error("Failed to open audit evidence:", err);
+    }
+  }
+
+  async function downloadReviewedAudit() {
+    if (!auditId) return;
+    try {
+      const { data, error } = await supabase.functions.invoke("hardware-audit", { body: { action: "export-reviewed", audit_id: auditId, token: identity?.token } });
+      if (error || data?.error) throw error || new Error(data?.error);
+      window.open(data.url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      console.error("Failed to export reviewed audit:", err);
+      setErrorText("Could not create the reviewed schedule.");
     }
   }
 
@@ -586,7 +615,28 @@ function App() {
 
         {view === "conversation" && (
           <main className="conversation-main">
-            <div className="conversation-messages">
+            {auditChecks && (
+              <section className="audit-summary" aria-label="Hardware audit summary">
+                <div className="audit-summary-header">
+                  <strong>Hardware Schedule Audit</strong>
+                  <span>{auditSummaryMessage?.metadata?.auditStage || "Audit status"}</span>
+                </div>
+                <div className="audit-summary-grid">
+                  {[
+                    ["🔥", "Fire Check", auditChecks.fire],
+                    ["💡", "Suggestions", auditChecks.suggestions],
+                    ["🎨", "Colour Check", auditChecks.colour],
+                  ].map(([icon, label, check]) => (
+                    <button type="button" className="audit-summary-item" key={label} onClick={() => openAuditCheck(check)}>
+                      <span className="audit-summary-label">{icon} {label}</span>
+                      <strong>{label === "Suggestions" ? check.count ?? 0 : check.status}</strong>
+                    </button>
+                  ))}
+                </div>
+                <button type="button" className="teach-skip-button audit-reviewed-download" onClick={downloadReviewedAudit}>Download Reviewed Schedule</button>
+              </section>
+            )}
+            <div className="conversation-messages" ref={conversationMessagesRef} onScroll={handleConversationScroll}>
               {messages.map((m) => (
                 <div key={m.id} className={`message message-${m.role}`}>
                   <div className="message-label">

@@ -187,6 +187,65 @@ button {
   padding-bottom: 16px;
 }
 
+.audit-summary {
+  flex: 0 0 auto;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(0, 184, 217, 0.24);
+  border-radius: 10px;
+  background: rgba(16, 27, 32, 0.78);
+}
+
+.audit-summary-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: #e7ebee;
+  font-size: 14px;
+}
+
+.audit-summary-header span {
+  color: #89939e;
+  font-size: 12px;
+}
+
+.audit-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.audit-summary-item {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #dfe8ed;
+  text-align: left;
+}
+
+.audit-summary-item:hover {
+  border-color: rgba(0, 184, 217, 0.65);
+}
+
+.audit-summary-label {
+  color: #aeb9c1;
+  font-size: 12px;
+}
+
+.audit-summary-item strong {
+  overflow: hidden;
+  color: #00d1f5;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .message {
   max-width: 100%;
 }
@@ -1572,6 +1631,19 @@ button {
 
   .chat-box textarea {
     max-height: 120px;
+  }
+
+  .audit-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .audit-summary-header {
+    display: block;
+  }
+
+  .audit-summary-header span {
+    display: block;
+    margin-top: 4px;
   }
 
   .research-section-heading,
